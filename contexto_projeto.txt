@@ -1,0 +1,1219 @@
+
+--- ARQUIVO: .\config.py ---
+# Token e configurações gerais
+
+TOKEN = '8731458415:AAH2GTcf_ACsqltnQ9Aub-WmwLuyJMpud40'
+DB_NAME = 'game_data.db'
+
+--- ARQUIVO: .\database.py ---
+import os
+import sqlite3
+from datetime import datetime
+
+# Caminho do banco
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "hunter_game.db")
+
+def conectar():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row 
+    return conn
+
+def criar_tabela():
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS personagens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            user_id INTEGER,
+            nick TEXT UNIQUE,
+            genero TEXT,
+            senha TEXT,
+            gold INTEGER DEFAULT 100,
+            jogo_iniciado INTEGER DEFAULT 0,
+            level INTEGER DEFAULT 1,
+            xp INTEGER DEFAULT 0,
+            vida INTEGER DEFAULT 100,
+            ataque INTEGER DEFAULT 10,
+            defesa INTEGER DEFAULT 5,
+            sorte INTEGER DEFAULT 1,
+            pet_nome TEXT,
+            pet_vida INTEGER,
+            pet_ataque INTEGER,
+            pet_defesa INTEGER,
+            pet_agilidade INTEGER,
+            ultimo_login TEXT,
+            pet_imagem TEXT,
+            mapa_atual INTEGER DEFAULT 0,
+            mithril INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def salvar_personagem(telegram_id, nick, genero, senha):
+    conn = conectar()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO personagens (user_id, nick, genero, senha)
+            VALUES (?, ?, ?, ?)
+        """, (telegram_id, nick, genero, senha))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def reivindicar_login_diario(nick):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT ultimo_login, gold FROM personagens WHERE nick = ?", (nick,))
+    resultado = cursor.fetchone()
+    
+    if not resultado:
+        conn.close()
+        return False, "❌ Personagem não encontrado."
+
+    data_ultimo = resultado['ultimo_login']
+    gold_atual = resultado['gold']
+    hoje = datetime.now().strftime("%Y-%m-%d")
+
+    if data_ultimo == hoje:
+        conn.close()
+        return False, "❌ Você já resgatou seu bônus hoje!"
+
+    novo_gold = gold_atual + 100
+    cursor.execute("UPDATE personagens SET gold = ?, ultimo_login = ? WHERE nick = ?", (novo_gold, hoje, nick))
+    conn.commit()
+    conn.close()
+    return True, f"✅ Bônus resgatado! Gold atual: {novo_gold}"
+
+def get_jogador(user_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM personagens WHERE user_id = ?", (user_id,))
+    jogador = cursor.fetchone()
+    conn.close()
+    return jogador
+
+def buscar_personagem_por_nick(nick):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM personagens WHERE nick = ?", (nick,))
+    jogador = cursor.fetchone()
+    conn.close()
+    return jogador
+
+def atualizar_mapa_personagem(user_id, mapa_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE personagens SET mapa_atual = ? WHERE user_id = ?", (mapa_id, user_id))
+    conn.commit()
+    conn.close()
+
+def resetar_localizacao(user_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE personagens SET mapa_atual = 0 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def atualizar_estrutura_banco():
+    conn = conectar()
+    cursor = conn.cursor()
+    # Adiciona colunas novas caso não existam (migração segura)
+    colunas = [("mapa_atual", "INTEGER DEFAULT 0"), ("mithril", "INTEGER DEFAULT 0"), ("ultimo_login", "TEXT"), ("pet_imagem", "TEXT")]
+    for nome, tipo in colunas:
+        try:
+            cursor.execute(f"ALTER TABLE personagens ADD COLUMN {nome} {tipo}")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+    conn.close()
+
+# Mantive as funções de debug para você usar se precisar
+def debug_tabela():
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(personagens)")
+    print("COLUNAS:", cursor.fetchall())
+    conn.close()
+
+--- ARQUIVO: .\main.py ---
+# Aqui é o motor do bot
+import database
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from config import TOKEN
+from handlers import start, cadastro
+from handlers import perfil, menu
+from handlers import login, router
+from handlers import status as handler_status
+from handlers import viagem, caca
+
+print('Bot Online!')
+
+def main():
+    database.criar_tabela()
+    database.atualizar_estrutura_banco()
+    database.debug_tabela()
+    app = Application.builder().token(TOKEN).build()
+
+    # Handlers (Ouvintes)
+    app.add_handler(CommandHandler("start", start.inicio))
+    app.add_handler(CallbackQueryHandler(login.iniciar_login, pattern='^login$'))
+    app.add_handler(CallbackQueryHandler(cadastro.escolher_genero, pattern='^registrar$'))
+    app.add_handler(CallbackQueryHandler(cadastro.confirmar_genero, pattern="^genero_"))
+    app.add_handler(CommandHandler("perfil", perfil.ver_perfil))
+    app.add_handler(CallbackQueryHandler(start.resgatar_presente, pattern="resgatar_presente"))
+    app.add_handler(CallbackQueryHandler(start.chocar_ovo, pattern="chocar_ovo"))
+    app.add_handler(CallbackQueryHandler(menu.menu_principal, pattern="^menu_principal$"))
+    app.add_handler(CallbackQueryHandler(start.pet, pattern="pet"))
+    app.add_handler(CallbackQueryHandler(start.voltar_menu, pattern="menu"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,router.processar_texto))
+    app.add_handler(CommandHandler("sair", login.sair_conta))
+    app.add_handler(CallbackQueryHandler(start.login_diario, pattern="^login_diario$"))
+    app.add_handler(CallbackQueryHandler(handler_status.status, pattern="status"))
+    app.add_handler(CallbackQueryHandler(viagem.mostrar_mapas, pattern="^mapas$"))
+    app.add_handler(CallbackQueryHandler(viagem.aviso_bloqueado, pattern="^mapa_bloqueado$"))
+    app.add_handler(CallbackQueryHandler(viagem.entrar_no_mapa, pattern="^ir_"))
+    app.add_handler(CallbackQueryHandler(caca.procurar_monstro, pattern="^procurar_"))
+    app.add_handler(CallbackQueryHandler(caca.voltar_ao_mapa, pattern="^voltar_mapa$"))
+    app.add_handler(CallbackQueryHandler(caca.atacar_turno, pattern="^atacar_turno$"))
+    app.add_handler(CallbackQueryHandler(caca.voltar_ao_mapa, pattern="^fugir_luta$"))
+    
+    
+    # ... outros handlers
+
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
+    
+
+--- ARQUIVO: .\handlers\caca.py ---
+#Lógica da caça
+
+import os
+import random
+import database
+import asyncio  # Permite que o bot "espere" alguns segundos
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import ContextTypes
+from modelos.inimigos import inimigos_por_mapa
+from modelos.mapas import lista_mapas
+
+async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    # 1. Busca os dados do jogador
+    jogador = database.get_jogador(user_id)
+    mapa_id = jogador['mapa_atual']
+
+    # 2. Sorteia o inimigo
+    lista_possivel = inimigos_por_mapa.get(mapa_id, [])
+    if not lista_possivel:
+        await query.answer("Nenhum monstro nesta área...")
+        return
+
+    inimigo = random.choice(lista_possivel).copy() # .copy() para não alterar o original
+
+    # 3. SALVA O ESTADO DA LUTA (Importante para os turnos)
+    context.user_data["luta"] = {
+        "inimigo_nome": inimigo['nome'],
+        "inimigo_vida": inimigo['vida'],
+        "inimigo_vida_max": inimigo['vida'],
+        "inimigo_atq": inimigo['atq'],
+        "inimigo_def": inimigo.get('def', 0), # Evita erro se não tiver defesa
+        "inimigo_xp": inimigo['xp'],
+        "inimigo_gold": inimigo['gold'],
+        "inimigo_img": inimigo['img'],
+        "player_vida": jogador['vida'],
+        "mapa_id": mapa_id
+    }
+
+    # 4. Interface Inicial do Encontro
+    texto = (
+        f"⚔️ **UM INIMIGO APARECEU!**\n\n"
+        f"👾 Inimigo: {inimigo['nome']}\n"
+        f"❤️ Vida: {inimigo['vida']}/{inimigo['vida']}\n\n"
+        f"O que você vai fazer?"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("⚔️ ATACAR", callback_data="atacar_turno")],
+        [InlineKeyboardButton("🏃 FUGIR", callback_data="fugir_luta")]
+    ]
+    
+    caminho_img = os.path.join("imagens", inimigo['img'])
+    
+    try:
+        with open(caminho_img, "rb") as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except FileNotFoundError:
+        await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def atacar_turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    luta = context.user_data.get("luta")
+    
+    if not luta:
+        await query.edit_message_caption("❌ Erro: Luta não encontrada.")
+        return
+
+    jogador = database.get_jogador(user_id)
+
+    # --- ETAPA 1: ATAQUE DO JOGADOR ---
+    dano_player = max(1, jogador['ataque'] - (luta['inimigo_def'] // 2))
+    luta['inimigo_vida'] -= dano_player
+    
+    texto_player_ataca = (
+        f"⚔️ **COMBATE EM ANDAMENTO**\n\n"
+        f"👤 Você atacou o {luta['inimigo_nome']}!\n"
+        f"💥 Causou {dano_player} de dano.\n\n"
+        f"👾 {luta['inimigo_nome']}: ❤️ {max(0, luta['inimigo_vida'])}/{luta['inimigo_vida_max']}\n"
+        f"👤 Você: ❤️ {luta['player_vida']}/{jogador['vida']}\n\n"
+        f"⏳ Aguardando turno do inimigo..."
+    )
+
+    # Removemos os botões temporariamente para o jogador não clicar de novo enquanto o bot "pensa"
+    await query.edit_message_caption(caption=texto_player_ataca, reply_markup=None)
+
+    # VERIFICA VITÓRIA IMEDIATA
+    if luta['inimigo_vida'] <= 0:
+        await asyncio.sleep(1) # Pequena pausa para o jogador ler o último dano
+        novo_xp = jogador['xp'] + luta['inimigo_xp']
+        novo_gold = jogador['gold'] + luta['inimigo_gold']
+        
+        database.conectar().execute("UPDATE personagens SET xp = ?, gold = ? WHERE user_id = ?", (novo_xp, novo_gold, user_id)).connection.commit()
+
+        texto_vitoria = (
+            f"🏆 **VITÓRIA!**\n\n"
+            f"Você derrotou o {luta['inimigo_nome']}!\n"
+            f"💰 +{luta['inimigo_gold']} Gold | ✨ +{luta['inimigo_xp']} XP"
+        )
+        keyboard = [[InlineKeyboardButton("🏃 Voltar ao Mapa", callback_data=f"ir_{luta['mapa_id']}")]]
+        context.user_data["luta"] = None
+        await query.edit_message_caption(caption=texto_vitoria, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # --- ETAPA 2: TEMPO DE ESPERA (O "Turno do Monstro") ---
+    await asyncio.sleep(3) # O bot vai esperar 1.5 segundos aqui
+
+    # --- ETAPA 3: CONTRA-ATAQUE DO MONSTRO ---
+    dano_monstro = max(1, luta['inimigo_atq'] - (jogador['defesa'] // 2))
+    luta['player_vida'] -= dano_monstro
+
+    # VERIFICA DERROTA
+    if luta['player_vida'] <= 0:
+        texto_derrota = f"💀 DERROTA!\n\nO {luta['inimigo_nome']} causou {dano_monstro} de dano e te nocauteou!"
+        keyboard = [[InlineKeyboardButton("🏃 Voltar", callback_data=f"ir_{luta['mapa_id']}")]]
+        context.user_data["luta"] = None
+        await query.edit_message_caption(caption=texto_derrota, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # SE A LUTA CONTINUA: Mostra o dano do monstro e devolve os botões
+    texto_contra_ataque = (
+        f"⚔️ **COMBATE EM ANDAMENTO**\n\n"
+        f"👾 {luta['inimigo_nome']} contra-atacou!\n"
+        f"💥 Você sofreu {dano_monstro} de dano.\n\n"
+        f"👾 {luta['inimigo_nome']}: ❤️ {luta['inimigo_vida']}/{luta['inimigo_vida_max']}\n"
+        f"👤 Você: ❤️ {luta['player_vida']}/{jogador['vida']}\n\n"
+        f"Sua vez! O que vai fazer?"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("⚔️ ATACAR", callback_data="atacar_turno")],
+        [InlineKeyboardButton("🏃 FUGIR", callback_data="fugir_luta")]
+    ]
+    
+    await query.edit_message_caption(caption=texto_contra_ataque, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def voltar_ao_mapa(update, context):
+    query = update.callback_query
+    await query.answer("Você fugiu da luta!")
+    
+    user_id = query.from_user.id
+    jogador = database.get_jogador(user_id)
+    mapa_id = jogador['mapa_atual']
+    
+    context.user_data["luta"] = None # Limpa a luta ao fugir
+
+    from handlers.viagem import exibir_mapa
+    await exibir_mapa(update, context, mapa_id)
+
+--- ARQUIVO: .\handlers\cadastro.py ---
+# Lógica de gênero e Nick
+
+usuarios_estado = {}
+
+import sys
+import database
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import ContextTypes
+from handlers import start, menu
+
+
+async def escolher_genero(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    caminho_imagem = os.path.join('imagens', 'capa.png')
+
+    keyboard = [
+        [InlineKeyboardButton("Masculino ♂️", callback_data='genero_masculino')],
+        [InlineKeyboardButton("Feminino ♀️", callback_data='genero_feminino')]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    texto = "Para começar, qual o gênero do seu personagem?"
+
+    try:
+        with open(caminho_imagem, 'rb') as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto),
+                reply_markup=reply_markup
+            )
+    except FileNotFoundError:
+        await query.edit_message_text(
+            text=f"⚠️ (capa.png não encontrada)\n\n{texto}",
+            reply_markup=reply_markup
+        )
+
+
+async def confirmar_genero(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    genero_escolhido = query.data.split('_')[1]
+    context.user_data['genero'] = genero_escolhido
+    
+    context.user_data["esperando_nick"] = True
+    context.user_data["esperando_senha"] = False
+
+    print("🔥 ESTADO SALVO:", context.user_data)
+
+    nome_arquivo = f"{genero_escolhido}.png"
+    caminho_imagem = os.path.join('imagens', nome_arquivo)
+
+    texto = f"Gênero {genero_escolhido.capitalize()} escolhido! ✨\n\nAgora, digite o Nick do seu personagem:"
+
+    user_id = query.from_user.id
+
+    try:
+        with open(caminho_imagem, 'rb') as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto),
+                reply_markup=None
+            )
+    except FileNotFoundError:
+        await query.edit_message_caption(
+            caption=f"⚠️ (Imagem {nome_arquivo} não encontrada)\n\n{texto}",
+            reply_markup=None
+        )
+
+
+
+
+async def processar_texto_cadastro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    # 👉 ETAPA 1: Nick
+    if context.user_data.get("esperando_nick"):
+        nick = update.message.text
+
+        context.user_data["nick"] = nick
+        context.user_data["esperando_nick"] = False
+        context.user_data["esperando_senha"] = True
+
+        await update.message.reply_text(
+            f"🛡️ Nick definido: {nick}\n\nAgora digite sua senha:"
+        )
+        return
+
+    # 👉 ETAPA 2: Senha
+    if context.user_data.get("esperando_senha"):
+        senha = update.message.text
+        nick = context.user_data.get("nick")
+        genero = context.user_data.get("genero")
+        user_id = update.effective_user.id
+
+        print(f"🔥 Tentando salvar: {nick} | {user_id}")
+
+        sucesso = database.salvar_personagem(user_id, nick, genero, senha)
+
+        if sucesso == True:
+            context.user_data["esperando_nick"] = False
+            context.user_data["esperando_senha"] = False
+            context.user_data["personagem_logado"] = nick
+
+            # Criamos o botão que vai ativar a função 'resgatar_presente' no start.py
+            keyboard = [
+                [InlineKeyboardButton("🎁 Resgatar Presente de Boas-vindas", callback_data="resgatar_presente")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                f"✅ Cadastro concluído!\n\n"
+                f"👤 Nick: {nick}\n"
+                f"⚥ Gênero: {genero.capitalize()}\n\n"
+                f"🎁 Você recebeu um item especial de boas-vindas! Clique abaixo para abrir:",
+                reply_markup=reply_markup
+            )
+            # REMOVEMOS a linha: await menu.menu_principal(update, context)
+            return
+
+--- ARQUIVO: .\handlers\jogo.py ---
+# Lógica de exploração e combate
+
+
+--- ARQUIVO: .\handlers\login.py ---
+from telegram import Update
+from telegram.ext import ContextTypes
+import database
+from handlers import menu
+
+
+async def iniciar_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data["login_etapa"] = "nick"
+
+    await query.edit_message_caption(
+        "🔐 LOGIN\n\nDigite seu Nick:"
+    )
+    
+    
+async def processar_login(update, context):
+
+    etapa = context.user_data.get("login_etapa")
+
+    print("🔥 LOGIN ETAPA:", etapa)
+    print("🔥 LOGIN CHAMADO")
+    print("ETAPA:", context.user_data.get("login_etapa"))
+    print("TEXTO:", update.message.text)
+
+    # ETAPA 1: nick
+    if etapa == "nick":
+        context.user_data["login_nick"] = update.message.text
+        context.user_data["login_etapa"] = "senha"
+
+        await update.message.reply_text("🔑 Agora digite sua senha:")
+        return
+
+    # ETAPA 2: senha
+    elif etapa == "senha":
+        nick = context.user_data.get("login_nick")
+        senha = update.message.text
+
+        jogador = database.buscar_personagem_por_nick(nick)
+
+        # jogador[4] é onde está a senha no banco (de acordo com seu log)
+        if jogador and jogador[4] == senha:
+            # ✅ EM VEZ DE CLEAR, FAZEMOS ISSO:
+            # 1. Removemos apenas as chaves de controle do login
+            context.user_data.pop("login_etapa", None)
+            context.user_data.pop("login_nick", None)
+
+            # 2. CRIAMOS O CARIMBO DA SESSÃO (Essencial para o Menu)
+            context.user_data["personagem_logado"] = nick 
+
+            await update.message.reply_text(f"✅ Login OK! Bem-vindo, {nick}!")
+
+            # 3. Agora o menu vai funcionar porque o "personagem_logado" existe!
+            await menu.menu_principal(update, context)
+            
+        else:
+            # Aqui tudo bem usar o clear se quiser resetar em caso de erro
+            context.user_data.clear()
+            await update.message.reply_text("❌ Dados inválidos (Nick ou Senha incorretos).")
+            
+async def sair_conta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text(
+        "🔓 Você saiu da conta.\n\nUse /start para fazer login novamente."
+    )
+
+--- ARQUIVO: .\handlers\menu.py ---
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import ContextTypes
+from modelos.mapas import lista_mapas
+import database
+import os
+
+async def menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    # 1. Recupera o personagem logado na sessão [cite: 41]
+    nick = context.user_data.get("personagem_logado")
+    
+    if not nick:
+        if update.message:
+            await update.message.reply_text("❌ Erro: Sessão expirada. Use /start.")
+        elif update.callback_query:
+            await update.callback_query.answer("Sessão expirada!", show_alert=True)
+        return
+    
+    # 2. Busca no banco todos os dados do jogador [cite: 41, 43]
+    jogador = database.buscar_personagem_por_nick(nick)
+
+    if jogador is None:
+        metodo = update.callback_query.edit_message_text if update.callback_query else update.message.reply_text
+        await metodo(f"❌ Erro: O personagem '{nick}' não foi encontrado.")
+        return
+
+    # --- LÓGICA DA LOCALIZAÇÃO ---
+    # Busca o ID salvo no banco (coluna mapa_atual) [cite: 17, 71]
+    mapa_id_atual = jogador['mapa_atual']
+    
+    # Procura o nome correspondente na lista de mapas 
+    nome_local = "Desconhecido"
+    for mapa in lista_mapas:
+        if mapa['id'] == mapa_id_atual:
+            nome_local = mapa['nome']
+            break
+    # -----------------------------
+
+    # 4. Monta o layout com a localização dinâmica
+    texto = (
+        f"🏰 MENU PRINCIPAL\n\n"
+        f"👤 {jogador['nick']} — Lvl: {jogador['level']}\n"
+        f"📍 Localização: {nome_local}\n\n"
+        f"Escolha sua próxima ação:"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("Viajar", callback_data="mapas")],
+        [InlineKeyboardButton("📊 Status", callback_data="status")],
+        [InlineKeyboardButton("🐾 Meus Pets", callback_data="pet")],
+        [InlineKeyboardButton("Login Diário", callback_data="login_diario")],
+        
+    ]
+    
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    caminho_imagem = os.path.join("imagens", "capa.png")
+    
+    # A MÁGICA PARA NÃO ACUMULAR MENSAGENS:
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        
+        # Editamos a mídia da mensagem atual em vez de enviar uma nova
+        try:
+            with open(caminho_imagem, "rb") as foto:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
+                    reply_markup=reply_markup
+                )
+        except FileNotFoundError:
+            await query.edit_message_caption(caption=texto + "\n⚠️ (capa.png off)", reply_markup=reply_markup)
+    else:
+        # Se o usuário digitou algo (como no fim do login), enviamos uma nova
+        with open(caminho_imagem, "rb") as foto:
+            await update.message.reply_photo(photo=foto, caption=texto, reply_markup=reply_markup)
+
+--- ARQUIVO: .\handlers\perfil.py ---
+from telegram import Update
+from telegram.ext import ContextTypes
+import database
+
+async def ver_perfil(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nick = context.user_data.get("personagem_logado")
+    if not nick:
+        await update.message.reply_text("❌ Você não está logado.")
+        return
+
+    dados = database.buscar_personagem_por_nick(nick)
+    if not dados:
+        await update.message.reply_text("❌ Personagem não encontrado.")
+        return
+
+    emoji = "♂️" if dados["genero"] == "masculino" else "♀️"
+    
+    mensagem = (
+        f"📜 PERFIL\n\n"
+        f"👤 Nick: {dados['nick']}\n"
+        f"⚥ Gênero: {dados['genero'].capitalize()} {emoji}\n"
+        f"❤️ Vida: {dados['vida']}/100\n" 
+        f"💰 Gold: {dados['gold']}\n"  
+        f"⭐ Nível: {dados['level']}\n"
+        f"🧪 XP: {dados['xp']}/100\n"
+    )
+
+    await update.message.reply_text(mensagem, parse_mode="Markdown")
+    
+
+--- ARQUIVO: .\handlers\router.py ---
+
+import handlers.cadastro as cadastro
+import handlers.login as login
+
+async def processar_texto(update, context):
+
+    user_id = update.effective_user.id
+    
+    print("🔥 ROUTER FOI CHAMADO")
+
+    # LOGIN TEM PRIORIDADE
+    if context.user_data.get("login_etapa"):
+        await login.processar_login(update, context)
+        return
+
+    # CADASTRO
+    if context.user_data.get("esperando_nick") or context.user_data.get("esperando_senha"):
+        await cadastro.processar_texto_cadastro(update, context)
+        return
+
+--- ARQUIVO: .\handlers\start.py ---
+# Comando /start e Menu principal
+
+import os
+import database
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import ContextTypes
+from modelos.monstros import sortear_pet
+from handlers.menu import menu_principal
+from handlers import viagem
+
+async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+    
+    database.resetar_localizacao(user_id)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("⚔️ Criar Conta", callback_data='registrar'),
+            InlineKeyboardButton("Fazer Login", callback_data='login')
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    texto = "Bem-vindo ao Reino de Hunter 🏰\nSua jornada começa agora."
+
+    caminho_imagem = os.path.join("imagens", "capa.png")
+
+    try:
+        with open(caminho_imagem, "rb") as foto:
+            await update.effective_chat.send_photo(
+                photo=foto,
+                caption=texto,
+                reply_markup=reply_markup
+            )
+
+    except FileNotFoundError:
+        await update.effective_chat.send_message(
+            texto + "\n\n⚠️ (Imagem não encontrada)",
+            reply_markup=reply_markup
+        )
+
+# 🥚 OVO
+async def resgatar_presente(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+    await query.answer()
+
+    caminho_imagem = os.path.join('imagens', 'ovo.png')
+
+    try:
+        with open(caminho_imagem, 'rb') as foto:
+            from telegram import InputMediaPhoto
+
+            await query.edit_message_media(
+                media=InputMediaPhoto(
+                    media=foto,
+                    caption="🎁 Você encontrou um ovo misterioso...\n\nClique para chocar!"
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🥚 Chocar ovo", callback_data="chocar_ovo")]
+                ])
+            )
+
+    except FileNotFoundError:
+        await query.edit_message_caption(
+            caption="🎁 Ovo misterioso...\n\nClique para chocar!",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🥚 Chocar ovo", callback_data="chocar_ovo")]
+            ])
+        )
+
+
+# 🐣 CHOCAR OVO
+async def chocar_ovo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    pet = sortear_pet() 
+
+    conn = database.conectar()
+    cursor = conn.cursor()
+    
+    # Organizei o SQL para ficar fácil de ler: 7 campos = 7 interrogações
+    cursor.execute("""
+        UPDATE personagens 
+        SET jogo_iniciado = 1, 
+            pet_nome = ?, 
+            pet_vida = ?, 
+            pet_ataque = ?, 
+            pet_defesa = ?, 
+            pet_agilidade = ?, 
+            pet_imagem = ?, 
+            mapa_atual = 0
+        WHERE user_id = ?
+    """, (
+        pet["nome"], 
+        pet["vida"], 
+        pet["ataque"], 
+        pet["defesa"], 
+        pet["agilidade"], 
+        pet["imagem"], 
+        user_id
+    ))
+    conn.commit()
+    conn.close()
+
+    caminho_foto_pet = os.path.join('imagens', pet["imagem"])
+    
+    texto_sucesso = (
+        f"🎉 O OVO CHOCOU!\n\n"
+        f"🐾 Seu novo companheiro: {pet['nome']}\n"
+        f"⚔️ Status: Atk {pet['ataque']} | Def {pet['defesa']}\n\n"
+        f"Agora você pode explorar o universo de Hunter!"
+    )
+
+    keyboard = [[InlineKeyboardButton("🏰 Menu Principal", callback_data="menu_principal")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        with open(caminho_foto_pet, 'rb') as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto_sucesso),
+                reply_markup=reply_markup
+            )
+    except FileNotFoundError:
+        await query.edit_message_caption(
+            caption=f"⚠️ (Imagem {pet['imagem']} não encontrada)\n\n{texto_sucesso}",
+            reply_markup=reply_markup
+        )
+
+    
+async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    jogador = database.get_jogador(user_id) 
+
+    if not jogador or jogador["pet_nome"] is None:
+        await query.edit_message_caption("❌ Você ainda não tem um pet.")
+        return
+
+    # Usando a coluna pet_imagem que você definiu no banco
+    arquivo_imagem = jogador["pet_imagem"] if jogador["pet_imagem"] else "capa.png"
+    caminho_foto = os.path.join('imagens', arquivo_imagem)
+
+    texto = (
+        f"🐾 Pet: {jogador['pet_nome']}**\n\n"
+        f"❤️ Vida: {jogador['pet_vida']}\n"
+        f"⚔️ Ataque: {jogador['pet_ataque']}\n"
+        f"🛡️ Defesa: {jogador['pet_defesa']}\n"
+        f"⚡ Agilidade: {jogador['pet_agilidade']}"
+    )
+
+    keyboard = [[InlineKeyboardButton("⬅ Voltar", callback_data="menu")]]
+    
+    try:
+        with open(caminho_foto, 'rb') as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except FileNotFoundError:
+        await query.edit_message_caption(
+            caption=f"⚠️ (Imagem {arquivo_imagem} não encontrada)\n\n{texto}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+    
+async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    jogador = database.get_jogador(user_id)
+    
+    if not jogador:
+        await menu_principal(update, context)
+        return
+
+    # No SQLite com Row, acessamos pelo nome da coluna
+    mapa_id = jogador['mapa_atual']
+
+    if mapa_id == 0:
+        # Se está na vila (0), volta para o menu principal
+        await menu_principal(update, context)
+    else:
+        # Se está em outro mapa, chama a função que desenha o mapa
+        # Lembra que criamos a função 'exibir_mapa' no arquivo viagem.py?
+        from handlers.viagem import exibir_mapa
+        await exibir_mapa(update, context, mapa_id)
+
+
+async def login_diario(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    # Recupera o personagem logado na sessão
+    nick = context.user_data.get("login_nick")
+    
+    if not nick:
+        # Se falhar, tentamos a outra chave só por segurança
+        nick = context.user_data.get("personagem_logado")
+
+    if not nick:
+        await query.edit_message_caption("❌ Você precisa estar logado para resgatar o bônus.")
+        return
+
+    # Chama a lógica do banco
+    sucesso, mensagem = database.reivindicar_login_diario(nick)
+
+    # Cria o botão de voltar
+    keyboard = [[InlineKeyboardButton("⬅ Voltar ao Menu", callback_data="menu_principal")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if sucesso:
+        await query.edit_message_caption(f"🎁 LOGIN DIÁRIO\n\n{mensagem}", reply_markup=reply_markup)
+    else:
+        # Se já resgatou, exibe a mensagem de aviso
+        await query.edit_message_caption(f"⏳ AVISO\n\n{mensagem}", reply_markup=reply_markup)
+        
+
+--- ARQUIVO: .\handlers\status.py ---
+#Status do player
+
+import os
+import database
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import ContextTypes
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    user_id = query.from_user.id
+    
+    # 1. Busca os dados do jogador no banco
+    jogador = database.get_jogador(user_id)
+
+    if jogador is None:
+        await query.edit_message_caption(caption="❌ Erro: Personagem não encontrado.")
+        return
+
+    # 2. Lógica da Imagem baseada no Gênero
+    # Se o gênero for 'masculino', busca 'masculino.png'. Se 'feminino', busca 'feminino.png'
+    genero = jogador['genero'] 
+    nome_arquivo = f"{genero}.png"
+    caminho_imagem = os.path.join('imagens', nome_arquivo)
+
+    # 3. Montagem do Texto de Status
+    texto_status = (
+        f"📊 STATUS\n\n"
+        f"👤 Nick: {jogador['nick']}\n"
+        f"📈 Nível: {jogador['level']}\n"
+        f"🧪 XP: {jogador['xp']}/100\n"
+        f"❤️ Vida: {jogador['vida']}\n"
+        f"⚔️ Ataque: {jogador['ataque']}\n"
+        f"🛡️ Defesa: {jogador['defesa']}\n"
+        f"💰 Gold: {jogador['gold']}\n"
+        f"💎 Mithril: {jogador['mithril']}\n"
+    )
+    
+    # 4. Botão Voltar Inteligente
+    # Ele identifica onde você está para te devolver para o lugar certo
+    mapa_atual = jogador['mapa_atual']
+    
+    # Se estiver na Vila (0), volta para o menu principal. Se não, volta para o mapa de caça.
+    callback_volta = "menu_principal" if mapa_atual == 0 else f"ir_{mapa_atual}"
+    
+    keyboard = [[InlineKeyboardButton("⬅️ VOLTAR", callback_data=callback_volta)]]
+
+    # 5. Envio com troca de imagem
+    try:
+        with open(caminho_imagem, 'rb') as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto_status, parse_mode="Markdown"),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except FileNotFoundError:
+        # Se você esqueceu de colocar a imagem masculino.png ou feminino.png na pasta
+        await query.edit_message_caption(
+            caption=f"⚠️ (Imagem {nome_arquivo} não encontrada)\n\n{texto_status}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+--- ARQUIVO: .\handlers\viagem.py ---
+#Lógica das viagens
+
+import os
+import database
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import ContextTypes
+from modelos.mapas import lista_mapas
+
+async def mostrar_mapas(update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    jogador = database.get_jogador(user_id) 
+    
+    if not jogador:
+        return
+
+    # Pegamos os dados usando os nomes das colunas (Row)
+    lvl_atual = jogador['level']
+    
+    # Tentamos pegar a localização, com um fallback (valor padrão) para evitar erros
+    try:
+        local_id_no_banco = jogador['mapa_atual']
+    except Exception:
+        local_id_no_banco = 0 # Assume Lobby se a coluna falhar
+
+    keyboard = []
+    for mapa in lista_mapas:
+        # Lógica Dinâmica de Ícones
+        if mapa['id'] == local_id_no_banco:
+            icone = "📍" # Você está aqui
+            callback = "manter_local" 
+        elif lvl_atual >= mapa['lvl_min']:
+            icone = " " # Desbloqueado
+            callback = f"ir_{mapa['id']}"
+        else:
+            icone = "🔒" # Bloqueado por nível
+            callback = "mapa_bloqueado"
+        
+        keyboard.append([InlineKeyboardButton(
+            f"{icone} {mapa['nome']} (Lvl {mapa['lvl_min']})", 
+            callback_data=callback
+        )])
+
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
+    
+    texto = (
+        "🗺 SISTEMA DE VIAGEM\n\n"
+        f"Sua força atual: ⭐ Lvl {lvl_atual}\n"
+        "Selecione um destino abaixo:"
+    )
+    
+    caminho_imagem = os.path.join("imagens", "capa.png")
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    try:
+        with open(caminho_imagem, "rb") as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
+                reply_markup=reply_markup
+            )
+    except FileNotFoundError:
+        await query.edit_message_caption(
+            caption=texto + "\n\n⚠️ (capa.png não encontrada)", 
+            reply_markup=reply_markup,
+            parse_mode=None
+        )
+
+async def aviso_bloqueado(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer(
+        "❌ Nível insuficiente! Continue caçando para liberar este mapa.", 
+        show_alert=True
+    )
+
+async def manter_local(update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer(
+        "📍 Você já está neste local!", 
+        show_alert=False
+    )
+    
+    
+async def exibir_mapa(update, context, mapa_id):
+    """Exibe a interface do local atual (Vila ou Caça)"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    # 1. Atualiza o local no banco e busca dados do jogador
+    database.atualizar_mapa_personagem(user_id, mapa_id)
+    jogador = database.get_jogador(user_id)
+
+    # 2. Busca info do mapa
+    mapa_info = next((m for m in lista_mapas if m["id"] == mapa_id), None)
+    if not mapa_info:
+        await query.answer("❌ Local não encontrado!")
+        return
+
+    nome_mapa = mapa_info.get('nome', 'Área Desconhecida')
+    imagem_nome = mapa_info.get('imagem', 'capa.png')
+    caminho_img = os.path.join("imagens", imagem_nome)
+
+    # 3. CONSTRUÇÃO DO MENU DINÂMICO
+    keyboard = []
+
+    if mapa_id == 0:
+        # --- LAYOUT OFICIAL DO MENU PRINCIPAL (VILA) ---
+        texto = (
+            f"🏰 MENU PRINCIPAL\n\n"
+            f"👤 {jogador['nick']} — Lvl: {jogador['level']}\n"
+            f"📍 Localização: {nome_mapa}\n\n"
+            f"Escolha sua próxima ação:"
+        )
+        # Botões organizados como no seu menu principal original
+        keyboard.append([InlineKeyboardButton("🗺️ VIAJAR / EXPLORAR", callback_data="mapas")])
+        keyboard.append([InlineKeyboardButton("🎁 LOGIN DIÁRIO", callback_data="login_diario")])
+        keyboard.append([
+            InlineKeyboardButton("📊 STATUS", callback_data="status"),
+            InlineKeyboardButton("🐾 PET", callback_data="pet")
+        ])
+    else:
+        # --- LAYOUT DE MAPA DE CAÇA ---
+        desc_mapa = mapa_info.get('descricao', 'Um lugar cheio de mistérios...')
+        texto = (
+            f"📍 {nome_mapa}\n\n"
+            f"{desc_mapa}\n\n"
+            "O que deseja fazer nesta região?"
+        )
+        keyboard.append([InlineKeyboardButton("⚔️ CAÇAR NESTA ÁREA", callback_data=f"procurar_{mapa_id}")])
+        keyboard.append([
+            InlineKeyboardButton("📊 STATUS", callback_data="status"),
+            InlineKeyboardButton("🐾 PET", callback_data="pet")
+        ])
+        keyboard.append([InlineKeyboardButton("🗺️ MUDAR DE MAPA", callback_data="mapas")])
+        keyboard.append([InlineKeyboardButton("🏰 VOLTAR PARA A VILA", callback_data="ir_0")])
+
+    # 4. Envio da Interface (Edição ou Nova Mensagem)
+    try:
+        with open(caminho_img, "rb") as foto:
+            if update.callback_query:
+                await update.callback_query.edit_message_media(
+                    media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                await update.message.reply_photo(
+                    photo=foto, caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
+                )
+    except FileNotFoundError:
+        if update.callback_query:
+            await update.callback_query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await update.message.reply_text(text=texto, reply_markup=InlineKeyboardMarkup(keyboard))
+        
+async def entrar_no_mapa(update, context: ContextTypes.DEFAULT_TYPE):
+    """Esta função apenas recebe o clique e chama a exibição"""
+    query = update.callback_query
+    
+    # Extrai o ID do mapa do callback (ex: ir_1 -> 1)
+    try:
+        mapa_id = int(query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await query.answer("❌ Erro ao identificar o mapa.")
+        return
+
+    # Chama a função que criamos no Passo 1
+    await exibir_mapa(update, context, mapa_id)
+
+--- ARQUIVO: .\handlers\__init__.py ---
+# Esse arquivo torna a pasta um módulo
+
+
+
+--- ARQUIVO: .\modelos\inimigos.py ---
+# Aqui ficam os monstos a serem caçados.
+
+
+# Dicionário de inimigos organizados por ID de MAPA
+# Isso torna a busca muito mais rápida para o bot
+inimigos_por_mapa = {
+    1: [ # Acampamento do Pioneiro
+        {"nome": "Barata", "vida": 30, "atq": 5, "def": 2, "xp": 15, "gold": 10, "img": "barata.png"},
+        {"nome": "Aranha", "vida": 45, "atq": 8, "def": 3, "xp": 25, "gold": 20, "img": "aranha.png"},
+        {"nome": "Centopéia", "vida": 30, "atq": 5, "def": 1, "xp": 15, "gold": 10, "img": "centopeia.png"},
+        {"nome": "Grilo", "vida": 30, "atq": 5, "def": 0, "xp": 15, "gold": 10, "img": "grilo.png"},
+        {"nome": "Borboleta", "vida": 30, "atq": 5, "def": 0, "xp": 15, "gold": 10, "img": "borboleta.png"},
+    ],
+
+    2: [ # Bosque Queimado
+        {"nome": "Esqueleto Carbonizado", "vida": 65, "atq": 12, "xp": 40, "gold": 35, "img": "esqueleto.png"},
+        {"nome": "Aranha das Cinzas", "vida": 55, "atq": 15, "xp": 45, "gold": 40, "img": "aranha.png"},
+    ],
+    # Você pode ir adicionando conforme cria os novos mapas...
+}
+
+--- ARQUIVO: .\modelos\mapas.py ---
+
+
+# mapas 
+lista_mapas = [
+    {"id": 0, "nome": "Vila Inicial", "lvl_min": 0, "imagem": "capa.png"},
+    {"id": 1, "nome": "Acampamento do Pioneiro", "lvl_min": 1, "imagem": "acampamento1.png"},
+    {"id": 2, "nome": "Bosque Queimado", "lvl_min": 4, "imagem": "bosque-queimado2.png"},
+    {"id": 3, "nome": "Ponte dos Suspiros", "lvl_min": 6, "imagem": "ponte3.png"},
+    {"id": 4, "nome": "Tumba do Caçador Ancião", "lvl_min": 8, "imagem": "tumba4.png"},
+    {"id": 5, "nome": "Cachoeira da Serenidade", "lvl_min": 10, "imagem": "cachoeira5.png"},
+    {"id": 6, "nome": "Desfiladeiro do Eco", "lvl_min": 12, "imagem": "desfiladeiro6.png"},
+    {"id": 7, "nome": "Pico do Observador", "lvl_min": 14, "imagem": "pico7.png"},
+    {"id": 8, "nome": "Portal das Montanhas", "lvl_min": 16, "imagem": "portal8.png"}
+    
+]
+    # Adicione até completar os 10 mapas...
+
+--- ARQUIVO: .\modelos\monstros.py ---
+# Aqui vou deixar as informaçõs sobre os todos os monstros do game
+
+import random
+
+pets = [
+    {
+        "nome": "Falcão filhote",
+        "vida": 100,
+        "ataque": 15,
+        "defesa": 5,
+        "agilidade": 20,
+        "imagem": "pet_falcao_filhote.png"
+    },
+    {
+        "nome": "Lobo filhote",
+        "vida": 120,
+        "ataque": 20,
+        "defesa": 10,
+        "agilidade": 15,
+        "imagem": "pet_lobo_filhote.png"
+    },
+    {
+        "nome": "Tartaruga filhote",
+        "vida": 150,
+        "ataque": 10,
+        "defesa": 15,
+        "agilidade": 8,
+        "imagem": "pet_tartaruga_filhote.png"
+    }
+]
+
+def sortear_pet():
+    return random.choice(pets)
+
+
+
+--- ARQUIVO: .\modelos\__init__.py ---
+# Esse aruivo transforma a pasta em módulo
+
