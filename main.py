@@ -8,6 +8,8 @@ from handlers import perfil, menu
 from handlers import login, router
 from handlers import status as handler_status
 from handlers import viagem, caca, mochila
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 print('Bot Online!')
 print("Bot iniciado - Versão 1.0.2")
@@ -51,7 +53,7 @@ def main():
     
     
     # ... outros handlers
-
+    print("Bot aguardando mensagens...")
     app.run_polling()
 
 if __name__ == '__main__':
