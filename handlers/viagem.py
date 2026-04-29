@@ -47,7 +47,7 @@ async def mostrar_mapas(update, context: ContextTypes.DEFAULT_TYPE):
     
     texto = (
         "🗺 SISTEMA DE VIAGEM\n\n"
-        f"Sua força atual: ⭐ Lvl {lvl_atual}\n"
+        f"Lvl: ⭐ Lvl {lvl_atual}\n"
         "Selecione um destino abaixo:"
     )
     
@@ -79,92 +79,58 @@ async def manter_local(update, context: ContextTypes.DEFAULT_TYPE):
         show_alert=False
     )
     
-    
 async def exibir_mapa(update, context, mapa_id):
-    """Exibe a interface do local atual (Vila ou Caça)"""
-    
-    # --- CORREÇÃO DO ERRO 'NONETYPE' ---
-    # Pegamos o ID do usuário de forma segura (funciona em Login E em Botões)
     user_id = update.effective_user.id 
-    query = update.callback_query # Pode ser None se vier do login/texto
-    # ----------------------------------
+    query = getattr(update, "callback_query", None)
     
-    # 1. Atualiza o local no banco e busca dados do jogador
+    print(f"DEBUG VIAGEM: Entrando em exibir_mapa. ID: {mapa_id}")
+    
+    database.curar_personagem_total(user_id)
     database.atualizar_mapa_personagem(user_id, mapa_id)
     jogador = database.get_jogador(user_id)
 
     if not jogador:
-        # Caso o jogador não seja encontrado por algum motivo
         return
 
-    # 2. Busca info do mapa na lista_mapas
     mapa_info = next((m for m in lista_mapas if m["id"] == mapa_id), None)
     if not mapa_info:
-        if query: await query.answer("❌ Local não encontrado!")
         return
 
     nome_mapa = mapa_info.get('nome', 'Área Desconhecida')
     imagem_nome = mapa_info.get('imagem', 'capa.png')
     caminho_img = os.path.join("imagens", imagem_nome)
 
-    # 3. CONSTRUÇÃO DO MENU DINÂMICO
     keyboard = []
-
+    
     if mapa_id == 0:
-        # LAYOUT MENU PRINCIPAL (VILA)
-        texto = (
-            f"🏰 Menu principal\n\n"
-            f"👤 {jogador['nick']} — Lvl: {jogador['level']}\n"
-            f"📍 Localização: {nome_mapa}\n\n"
-            f"Escolha sua próxima ação:"
-        )
+        texto = f"🏰 MENU PRINCIPAL\n\n👤 {jogador['nick']}\n📍 Localização: {nome_mapa}"
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
-        keyboard.append([InlineKeyboardButton("🎁 Login diário", callback_data="login_diario")])
-        keyboard.append([
-            InlineKeyboardButton("📊 Status", callback_data="status"),
-            InlineKeyboardButton("🐾 Pet", callback_data="pet")
-        ])
+        keyboard.append([InlineKeyboardButton("📊 Status", callback_data="status")])
+        keyboard.append([InlineKeyboardButton("🎁 Login Diário", callback_data="login_diario")])
+        # Correção aqui: Acesso via ['coluna'] em vez de .get('coluna')
+        if jogador['pet_nome']:
+            keyboard.append([InlineKeyboardButton("🐾 Pet", callback_data="pet")])
+            
     else:
-        # LAYOUT MAPA DE CAÇA
-        desc_mapa = mapa_info.get('descricao', 'Um lugar cheio de mistérios...')
-        texto = (
-            f"📍 {nome_mapa}\n\n"
-            f"{desc_mapa}\n\n"
-            "O que deseja fazer nesta região?"
-        )
+        texto = f"📍 {mapa_info.get('descricao', 'Um lugar aparentemente tranquilo e seguro...')}"
         keyboard.append([InlineKeyboardButton("⚔️ Caçar", callback_data=f"procurar_{mapa_id}")])
-        keyboard.append([
-            InlineKeyboardButton("📊 Status", callback_data="status"),
-            InlineKeyboardButton("🐾 Pet", callback_data="pet")
-        ])
-        keyboard.append([InlineKeyboardButton("🗺️ Voltar", callback_data="mapas")])
+        keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
 
-    # 4. ENVIO DA RESPOSTA (Lógica Híbrida)
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
         with open(caminho_img, "rb") as foto:
             if query:
-                # Se o usuário CLICOU num botão (Voltar, Viajar, etc)
                 await query.answer()
-                await query.edit_message_media(
-                    media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
-                    reply_markup=reply_markup
-                )
+                await query.edit_message_media(media=InputMediaPhoto(media=foto, caption=texto), reply_markup=reply_markup)
             else:
-                # Se o usuário acabou de digitar a SENHA (Login/Cadastro)
-                await update.message.reply_photo(
-                    photo=foto, 
-                    caption=texto, 
-                    reply_markup=reply_markup, 
-                    parse_mode="Markdown"
-                )
+                await update.message.reply_photo(photo=foto, caption=texto, reply_markup=reply_markup)
     except FileNotFoundError:
-        # Fallback caso a imagem não exista na pasta
         if query:
-            await query.edit_message_caption(caption=texto, reply_markup=reply_markup, parse_mode="Markdown")
+            await query.edit_message_caption(caption=texto, reply_markup=reply_markup)
         else:
-            await update.message.reply_text(text=texto, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(text=texto, reply_markup=reply_markup)
+            
         
 async def entrar_no_mapa(update, context: ContextTypes.DEFAULT_TYPE):
     """Esta função apenas recebe o clique e chama a exibição"""

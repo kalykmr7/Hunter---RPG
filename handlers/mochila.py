@@ -22,7 +22,7 @@ async def ver_mochila(update: Update, context: ContextTypes.DEFAULT_TYPE):
     jogador = database.get_jogador(user_id)
     
     texto_equipamentos = "⚔️ Equipamentos\n"
-    texto_consumiveis = "🍎 Itens e Consumíveis\n"
+    texto_consumiveis = "Itens e Consumíveis\n"
     
     tem_equip = False
     tem_cons = False

@@ -115,5 +115,5 @@ async def processar_texto_cadastro(update: Update, context: ContextTypes.DEFAULT
                 f"🎁 Você recebeu um item especial de boas-vindas! Clique abaixo para abrir:",
                 reply_markup=reply_markup
             )
-            # REMOVEMOS a linha: await menu.menu_principal(update, context)
+            
             return

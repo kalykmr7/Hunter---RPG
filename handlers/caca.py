@@ -3,47 +3,28 @@
 import os
 import random
 import database
-import asyncio  # Permite que o bot "espere" alguns segundos
+import asyncio  
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
-from modelos.inimigos import inimigos_por_mapa
-from modelos.mapas import lista_mapas
-
-
 
 async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     
-    # 1. Busca os dados do jogador
+    # Cura o jogador para o padrão Arcade
+    database.curar_personagem_total(user_id)
     jogador = database.get_jogador(user_id)
     
-    if not jogador:
-        await query.answer("Personagem não encontrado.", show_alert=True)
-        return
-    
-    mapa_id = jogador['mapa_atual']
+    if not jogador: return
 
-    # 2. NOVIDADE: Sorteia o inimigo direto do Banco de Dados
+    mapa_id = jogador['mapa_atual']
     inimigo_db = database.get_monstro_aleatorio(mapa_id)
     
     if not inimigo_db:
-        await query.answer("Nenhum monstro cadastrado para este mapa...")
+        await query.answer("Nenhum monstro nesta área...")
         return
 
-    # 3. Busca os drops do monstro no Banco de Dados
-    drops_db = database.get_drops_monstro(inimigo_db['nome'])
-    
-    # Convertemos os drops do banco para o formato que o sistema de luta já entende
-    lista_drops = []
-    for d in drops_db:
-        lista_drops.append({
-            "item": d['item_nome'],
-            "chance": d['chance'],
-            "tipo": "consumivel" # Por enquanto, drops de monstros são consumíveis
-        })
-
-    # 4. SALVA O ESTADO DA LUTA (Usando os nomes das colunas do banco)
+    # SALVA O ESTADO DA LUTA (Repare que não salvamos mais drops aqui)
     context.user_data["luta"] = {
         "inimigo_nome": inimigo_db['nome'],
         "inimigo_vida": inimigo_db['vida'],
@@ -53,29 +34,23 @@ async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "inimigo_xp": inimigo_db['xp_recompensa'],
         "inimigo_gold": inimigo_db['gold_recompensa'],
         "inimigo_img": inimigo_db['imagem'],
-        "inimigo_drops": lista_drops,
         "player_vida": jogador['vida'],
         "mapa_id": mapa_id
     }
 
-    # 5. Interface Inicial
     texto = (
-        f"⚔️ Uma criatura apareceu!\n\n"
-        f"👾 Inimigo: {inimigo_db['nome']}\n"
-        f"❤️ Vida: {inimigo_db['vida']}/{inimigo_db['vida']}\n\n"
-        f"O que você vai fazer?"
+        f"⚔️ Um {inimigo_db['nome']} bloqueia seu caminho!\n\n"
+        f"👾 HP: {inimigo_db['vida']}/{inimigo_db['vida']}\n"
+        f"👤 Seu HP: {jogador['vida']}/{jogador['vida_max']}\n\n"
+        f"Prepare-se para o combate!"
     )
 
-    itens_player = database.get_inventario(user_id)
-    tem_pocao = any("Poção" in item['item_nome'] for item in itens_player)
-
-    keyboard = [[InlineKeyboardButton("⚔️ Atacar", callback_data="atacar_turno")]]
-    if tem_pocao:
-        keyboard.append([InlineKeyboardButton("🧪 Usar poção", callback_data="luta_usar_pocao")])
-    keyboard.append([InlineKeyboardButton("🏃 Fugir", callback_data="fugir_luta")])
+    keyboard = [
+        [InlineKeyboardButton("⚔️ Atacar", callback_data="atacar_turno")],
+        [InlineKeyboardButton("🏃 Fugir", callback_data="fugir_luta")]
+    ]
 
     caminho_img = os.path.join("imagens", inimigo_db['imagem'])
-    
     try:
         with open(caminho_img, "rb") as foto:
             await query.edit_message_media(
@@ -84,13 +59,10 @@ async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except FileNotFoundError:
         await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-        
 
-
-# --- ARQUIVO: .\handlers\caca.py ---
 
 async def atacar_turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Executa o turno de ataque e oferece opção de caçar novamente em caso de vitória"""
+    """Executa o turno de ataque com dano randomizado"""
     query = update.callback_query
     await query.answer()
     
@@ -101,61 +73,73 @@ async def atacar_turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_caption("❌ Erro: Luta não encontrada.")
         return
 
-    jogador = database.get_jogador(user_id)
+    jogador_base = database.get_jogador(user_id)
+    jogador = database.aplicar_bonus_pet(dict(jogador_base))
 
-    # 1. ATAQUE DO JOGADOR
-    dano_player = max(1, jogador['ataque'] - (luta['inimigo_def'] // 2))
-    luta['inimigo_vida'] -= dano_player
+    # --- 1. ATAQUE DO JOGADOR (RANDOMIZADO) ---
+    dano_base_player = max(1, jogador['ataque'] - (luta['inimigo_def'] // 2))
+    multiplicador_p = random.uniform(0.8, 1.2)
+    dano_final_player = int(dano_base_player * multiplicador_p)
+    if dano_final_player < 1: dano_final_player = 1 
+
+    luta['inimigo_vida'] -= dano_final_player
     
     # --- BLOCO DE VITÓRIA ---
     if luta['inimigo_vida'] <= 0:
         novo_xp = jogador['xp'] + luta['inimigo_xp']
         novo_gold = jogador['gold'] + luta['inimigo_gold']
-        
-        itens_ganhos = []
-        for drop in luta.get('inimigo_drops', []):
-            if random.randint(1, 100) <= drop['chance']:
-                sucesso, _ = database.adicionar_item_inventario(user_id, drop['item'], drop['tipo'])
-                if sucesso: 
-                    itens_ganhos.append(drop['item'])
-                    break 
+            
+        # Sorteio de Drop Aleatório do Mapa
+        item_dropado = database.get_drop_aleatorio(luta['mapa_id'])
+        mensagem_drop = ""
+            
+        if item_dropado:
+            tipo_item = "consumivel" if "Poção" in item_dropado or "Maçã" in item_dropado else "material"
+            sucesso, _ = database.adicionar_item_inventario(user_id, item_dropado, tipo_item, 1)
+            if sucesso:
+                mensagem_drop = f"🎁 Drop: {item_dropado}\n"
 
+        # Atualiza banco com xp e gold
         conn = database.conectar()
-        conn.execute("UPDATE personagens SET xp = ?, gold = ?, vida = ? WHERE user_id = ?", (novo_xp, novo_gold, luta['player_vida'], user_id))
+        conn.execute("UPDATE personagens SET xp = ?, gold = ?, vida = ? WHERE user_id = ?", 
+                     (novo_xp, novo_gold, luta['player_vida'], user_id))
         conn.commit()
         conn.close()
 
-        texto_resultado = f"🏆 Vitória!\n\nVocê derrotou o {luta['inimigo_nome']}!\n💰 +{luta['inimigo_gold']} Gold | ✨ +{luta['inimigo_xp']} XP\n"
-        if itens_ganhos: texto_resultado += f"🎁 Drop: {itens_ganhos[0]}\n"
+        texto_resultado = (
+            f"🏆 VITÓRIA!\n\n"
+            f"Você derrotou o {luta['inimigo_nome']}!\n"
+            f"💰 +{luta['inimigo_gold']} Gold | ✨ +{luta['inimigo_xp']} XP\n"
+            f"{mensagem_drop}"
+        )
         
+        # Verifica Level Up
         xp_necessario = database.calcular_xp_necessario(jogador['level'])
         if novo_xp >= xp_necessario:
             status_novos = database.subir_de_nivel(user_id)
             if status_novos: texto_resultado += f"\n🌟 LEVEL UP! Nível {status_novos['level']}!\n"
 
-        # --- NOVIDADE: Teclado com duas opções ---
         keyboard = [
             [InlineKeyboardButton("⚔️ Caçar novamente", callback_data=f"procurar_{luta['mapa_id']}")],
             [InlineKeyboardButton("🏃 Voltar", callback_data=f"ir_{luta['mapa_id']}")]
         ]
         
-        context.user_data["luta"] = None # Limpa a luta atual da memória
-        
-        await query.edit_message_caption(
-            caption=texto_resultado, 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode="Markdown"
-        )
+        context.user_data["luta"] = None 
+        await query.edit_message_caption(caption=texto_resultado, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
-    # 2. TURNO DO MONSTRO
-    texto_feedback = f"⚔️ Combate\n\n👤 Você causou {dano_player} de dano!\n⏳ O {luta['inimigo_nome']} está atacando..."
+    # --- 2. TURNO DO MONSTRO (SE ELE SOBREVIVEU) ---
+    texto_feedback = f"⚔️ Combate\n\n👤 Você causou {dano_final_player} de dano!\n⏳ O {luta['inimigo_nome']} está atacando..."
     await query.edit_message_caption(caption=texto_feedback, reply_markup=None, parse_mode="Markdown")
     
-    await asyncio.sleep(1.2) 
+    await asyncio.sleep(1.0) 
 
-    dano_monstro = max(1, luta['inimigo_atq'] - (jogador['defesa'] // 2))
-    luta['player_vida'] -= dano_monstro
+    dano_base_monstro = max(1, luta['inimigo_atq'] - (jogador['defesa'] // 2))
+    multiplicador_m = random.uniform(0.8, 1.2)
+    dano_final_monstro = int(dano_base_monstro * multiplicador_m)
+    if dano_final_monstro < 1: dano_final_monstro = 1
+
+    luta['player_vida'] -= dano_final_monstro
 
     conn = database.conectar()
     conn.execute("UPDATE personagens SET vida = ? WHERE user_id = ?", (max(0, luta['player_vida']), user_id))
@@ -164,13 +148,13 @@ async def atacar_turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check Derrota
     if luta['player_vida'] <= 0:
-        texto_derrota = f"💀 DERROTA!\n\nO {luta['inimigo_nome']} te nocauteou!"
-        keyboard = [[InlineKeyboardButton("🏰 Voltar para a Vila", callback_data="ir_0")]]
+        texto_derrota = f"💀 DERROTA!\n\nO {luta['inimigo_nome']} causou {dano_final_monstro} de dano e te derrotou!"
+        keyboard = [[InlineKeyboardButton("Voltar", callback_data="ir_0")]]
         context.user_data["luta"] = None
         await query.edit_message_caption(caption=texto_derrota, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
-    log = f"👤 Causou {dano_player} de dano\n👾 Recebeu {dano_monstro} de dano"
+    log = f"👤 Causou {dano_final_player} de dano\n👾 Recebeu {dano_final_monstro} de dano"
     await voltar_turno_luta(update, context, log)
     
 
@@ -197,13 +181,17 @@ async def usar_pocao_luta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def voltar_ao_mapa(update, context):
     query = update.callback_query
-    await query.answer("Você fugiu da luta!")
+    await query.answer("Vida recuperada!")
     
     user_id = query.from_user.id
+    
+    # --- NOVIDADE: Cura 100% ao sair da tela de combate ---
+    database.curar_personagem_total(user_id)
+    
     jogador = database.get_jogador(user_id)
     mapa_id = jogador['mapa_atual']
     
-    context.user_data["luta"] = None # Limpa a luta ao fugir
+    context.user_data["luta"] = None 
 
     from handlers.viagem import exibir_mapa
     await exibir_mapa(update, context, mapa_id)

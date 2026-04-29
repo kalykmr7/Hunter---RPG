@@ -2,6 +2,8 @@ import os
 import sqlite3
 from datetime import datetime
 from config import DB_NAME
+from modelos.itens import LISTA_ITENS_MESTRE
+from modelos.inimigos import LISTA_MONSTROS_MESTRE, LISTA_DROPS_MAPAS
 
 # Caminho do banco
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,8 +36,9 @@ def criar_tabela():
             vida INTEGER DEFAULT 100,
             vida_max INTEGER DEFAULT 100,
             ataque INTEGER DEFAULT 10,
-            defesa INTEGER DEFAULT 5,
+            defesa INTEGER DEFAULT 10,
             sorte INTEGER DEFAULT 1,
+            pet_equipado INTEGER DEFAULT 0,
             pet_nome TEXT,
             pet_vida INTEGER,
             pet_ataque INTEGER,
@@ -91,120 +94,73 @@ def criar_tabela():
         )
     ''')
 
-    # 5. Tabela de Drops (RECRIAÇÃO FORÇADA)
-    # Se a tabela existir mas estiver errada, o atualizar_estrutura_banco vai resolver.
+    # Atualizando a tabela de drops para ser por MAPA
+    cursor.execute('DROP TABLE IF EXISTS drops_monstros')
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS drops_monstros (
+        CREATE TABLE IF NOT EXISTS drops_mapas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            monstro_nome TEXT,
+            mapa_id INTEGER,
             item_nome TEXT,
-            chance INTEGER,
-            qtd_min INTEGER DEFAULT 1,
-            qtd_max INTEGER DEFAULT 1
+            chance INTEGER
         )
     ''')
-    
     conn.commit()
     conn.close()
     
 
-# --- ARQUIVO: .\database.py ---
 
 def popular_dados_iniciais():
-    """Popula o banco com o bestiário expandido e novos drops"""
+    """Lê os arquivos de modelos e popula o banco de dados"""
     conn = conectar()
     cursor = conn.cursor()
 
-    # 1. ITENS MESTRE (Catálogo)
-    itens = [
-        ('Poção Pequena', 'consumivel', 'cura', 20, 'Recupera 20% da vida.', 50),
-        ('Poção Média', 'consumivel', 'cura', 50, 'Recupera 50% da vida.', 150),
-        ('Poção Grande', 'consumivel', 'cura', 85, 'Recupera 85% da vida.', 300),
-        ('Maçã', 'consumivel', 'pet', 10, 'Dá XP ao seu pet.', 20),
-        ('Espada de Madeira', 'equipamento', 'arma', 5, 'Uma espada simples (+5 Atq).', 100),
-        ('Armadura de Couro', 'equipamento', 'armadura', 3, 'Proteção básica (+3 Def).', 120),
-        ('Osso Antigo', 'material', 'venda', 0, 'Um osso velho que pode ser vendido.', 15),
-        ('Essência Mágica', 'material', 'venda', 0, 'Fragmento de energia pura.', 50)
-    ]
+    # 1. ITENS MESTRE
     cursor.executemany("""
-        INSERT OR IGNORE INTO itens_mestre (nome, tipo, subtipo, valor_efeito, descricao, preco_gold) 
+        INSERT OR REPLACE INTO itens_mestre (nome, tipo, subtipo, valor_efeito, descricao, preco_gold) 
         VALUES (?, ?, ?, ?, ?, ?)
-    """, itens)
+    """, LISTA_ITENS_MESTRE)
 
-    # 2. MONSTROS MESTRE (Expandido para os Mapas 1 a 8)
-    # Formato: (Nome, Mapa_ID, Vida, Ataque, Defesa, XP, Gold, Imagem)
-    monstros = [
-        # MAPA 1: Acampamento do Pioneiro (Lvl 1)
-        ('Barata', 1, 30, 6, 2, 15, 10, 'barata.png'),
-        ('Aranha', 1, 45, 9, 3, 25, 20, 'aranha.png'),
-        ('Centopéia', 1, 35, 7, 2, 18, 12, 'centopeia.png'),
-
-        # MAPA 2: Bosque Queimado (Lvl 4)
-        ('Esqueleto Carbonizado', 2, 70, 15, 6, 45, 35, 'esqueleto.png'),
-        ('Lobo de Fogo', 2, 85, 18, 5, 55, 45, 'lobo_fogo.png'),
-        ('Espírito das Cinzas', 2, 60, 22, 2, 50, 40, 'espirito_cinzas.png'),
-
-        # MAPA 3: Ponte dos Suspiros (Lvl 6)
-        ('Fantasma Errante', 3, 100, 25, 8, 80, 60, 'fantasma.png'),
-        ('Gárgula de Pedra', 3, 150, 20, 15, 95, 75, 'gargula.png'),
-
-        # MAPA 4: Tumba do Caçador Ancião (Lvl 8)
-        ('Zumbi Reanimado', 4, 180, 30, 12, 130, 100, 'zumbi.png'),
-        ('Sombra Faminta', 4, 140, 45, 5, 150, 120, 'sombra.png'),
-
-        # MAPA 5: Cachoeira da Serenidade (Lvl 10)
-        ('Naga Guerreira', 5, 250, 40, 20, 200, 180, 'naga.png'),
-        ('Caranguejo Blindado', 5, 350, 30, 35, 220, 190, 'caranguejo.png'),
-
-        # MAPA 6: Desfiladeiro do Eco (Lvl 12)
-        ('Wyvern Jovem', 6, 400, 60, 25, 350, 300, 'wyvern.png'),
-        ('Harpias Famintas', 6, 300, 75, 15, 320, 280, 'harpia.png'),
-
-        # MAPA 7: Pico do Observador (Lvl 14)
-        ('Gigante da Montanha', 7, 800, 90, 50, 600, 550, 'gigante.png'),
-        ('Elemental do Ar', 7, 500, 120, 20, 650, 600, 'elemental.ar.png'),
-
-        # MAPA 8: Portal das Montanhas (Lvl 16)
-        ('Guardião do Portal', 8, 1200, 150, 80, 1200, 1000, 'guardiao.png'),
-        ('Quimera Infernal', 8, 1000, 180, 60, 1500, 1200, 'quimera.png')
-    ]
+    # 2. MONSTROS MESTRE
     cursor.executemany("""
-        INSERT OR IGNORE INTO monstros_mestre (nome, mapa_id, vida, ataque, defesa, xp_recompensa, gold_recompensa, imagem) 
+        INSERT OR REPLACE INTO monstros_mestre (nome, mapa_id, vida, ataque, defesa, xp_recompensa, gold_recompensa, imagem) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, monstros)
+    """, LISTA_MONSTROS_MESTRE)
 
-    # 3. DROPS (Definindo recompensas para os novos monstros)
-    # Formato: (Monstro, Item, Chance, Min, Max)
-    drops = [
-        # Drops Mapa 1
-        ('Barata', 'Maçã', 40, 1),
-        ('Aranha', 'Poção Pequena', 25, 1),
-        ('Centopéia', 'Maçã', 30, 1),
-
-        # Drops Mapa 2
-        ('Esqueleto Carbonizado', 'Osso Antigo', 60, 1),
-        ('Lobo de Fogo', 'Poção Pequena', 30, 1),
-        ('Espírito das Cinzas', 'Essência Mágica', 15, 1),
-
-        # Drops Mapa 3
-        ('Fantasma Errante', 'Essência Mágica', 40, 1),
-        ('Gárgula de Pedra', 'Poção Média', 20, 1),
-
-        # Drops Mapas Superiores (Exemplos)
-        ('Zumbi Reanimado', 'Poção Média', 40, 1),
-        ('Naga Guerreira', 'Poção Grande', 15, 1),
-        ('Guardião do Portal', 'Poção Grande', 100, 1)
-    ]
+    # Popular a nova tabela de drops por mapa
+    cursor.execute("DELETE FROM drops_mapas") # Limpa para atualizar
     cursor.executemany("""
-        INSERT OR IGNORE INTO drops_monstros (monstro_nome, item_nome, chance, qtd_min) 
-        VALUES (?, ?, ?, ?)
-    """, drops)
+        INSERT INTO drops_mapas (mapa_id, item_nome, chance) 
+        VALUES (?, ?, ?)
+    """, LISTA_DROPS_MAPAS)
 
     conn.commit()
     conn.close()
-    print("✅ Bestiário e Catálogo de itens atualizados com sucesso!")
+    print("✅ Banco de dados sincronizado com os arquivos de modelos!")
     
+
+def get_drop_aleatorio(mapa_id):
+    """Sorteia um item baseado nos drops disponíveis para o mapa atual"""
+    conn = conectar()
+    cursor = conn.cursor()
+    # Busca todos os possíveis drops configurados para este mapa
+    cursor.execute("SELECT item_nome, chance FROM drops_mapas WHERE mapa_id = ?", (mapa_id,))
+    possibilidades = cursor.fetchall()
+    conn.close()
+
+    if not possibilidades:
+        return None
+
+    # Embaralha para não beneficiar sempre o primeiro da lista
+    import random
+    lista_temp = list(possibilidades)
+    random.shuffle(lista_temp)
+
+    for item in lista_temp:
+        # Se o número sorteado for menor ou igual à chance (ex: 20%), o item cai
+        if random.randint(1, 100) <= item['chance']:
+            return item['item_nome']
     
+    return None
     
 def get_monstro_aleatorio(mapa_id):
     """Busca um monstro aleatório do mapa específico no banco de dados"""
@@ -268,6 +224,7 @@ def reivindicar_login_diario(nick):
 
 def get_jogador(user_id):
     conn = conectar()
+    conn.row_factory = sqlite3.Row 
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM personagens WHERE user_id = ?", (user_id,))
     jogador = cursor.fetchone()
@@ -298,33 +255,41 @@ def resetar_localizacao(user_id):
 
 # --- ARQUIVO: .\database.py ---
 
+
 def atualizar_estrutura_banco():
     """Corrige colunas faltantes e resolve problemas de compatibilidade"""
     conn = conectar()
     cursor = conn.cursor()
     
-    # Adicionar colunas na tabela personagens caso não existam
-    colunas_personagens = [
-        ("vida_max", "INTEGER DEFAULT 100"),
-        ("pet_xp", "INTEGER DEFAULT 0"),
-        ("pet_level", "INTEGER DEFAULT 1"),
-        ("mochila_slots", "INTEGER DEFAULT 10")
-    ]
+    # 1. Definindo as colunas que PRECISAM existir na tabela personagens
+    colunas_necessarias = {
+        "vida_max": "INTEGER DEFAULT 100",
+        "pet_xp": "INTEGER DEFAULT 0",
+        "pet_level": "INTEGER DEFAULT 1",
+        "mochila_slots": "INTEGER DEFAULT 10",
+        "pet_equipado": "INTEGER DEFAULT 0" # <--- Adicionamos aqui!
+    }
     
-    for nome, tipo in colunas_personagens:
-        try:
-            cursor.execute(f"ALTER TABLE personagens ADD COLUMN {nome} {tipo}")
-        except sqlite3.OperationalError:
-            pass
+    # Verifica quais colunas já existem
+    cursor.execute("PRAGMA table_info(personagens)")
+    colunas_existentes = [info[1] for info in cursor.fetchall()]
+    
+    # Adiciona apenas as que faltam
+    for nome, tipo in colunas_necessarias.items():
+        if nome not in colunas_existentes:
+            try:
+                cursor.execute(f"ALTER TABLE personagens ADD COLUMN {nome} {tipo}")
+                print(f"DEBUG DB: Coluna '{nome}' criada com sucesso.")
+            except sqlite3.OperationalError as e:
+                print(f"DEBUG DB: Erro ao criar coluna {nome}: {e}")
 
-    # --- RESET DA TABELA DE DROPS SE ESTIVER ERRADA ---
-    # Vamos verificar se a coluna monstro_nome existe. Se não, deletamos e criamos de novo.
+    # --- RESET DA TABELA DE DROPS (MANTENHA A SUA LÓGICA) ---
     cursor.execute("PRAGMA table_info(drops_monstros)")
     colunas = [col[1] for col in cursor.fetchall()]
     
     if "monstro_nome" not in colunas and len(colunas) > 0:
         print("⚠️ Corrigindo tabela drops_monstros...")
-        cursor.execute("DROP TABLE drops_monstros")
+        cursor.execute("DROP TABLE IF EXISTS drops_monstros")
         cursor.execute('''
             CREATE TABLE drops_monstros (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -339,15 +304,7 @@ def atualizar_estrutura_banco():
     conn.commit()
     conn.close()
     
-    
-# Mantive as funções de debug para você usar se precisar
-def debug_tabela():
-    conn = conectar()
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(personagens)")
-    print("COLUNAS:", cursor.fetchall())
-    conn.close()
-    
+
     
 def subir_de_nivel(user_id):
     """Aumenta o nível e melhora os atributos, expandindo a Vida Máxima"""
@@ -374,7 +331,7 @@ def subir_de_nivel(user_id):
         nova_vida_atual = nova_vida_max 
         
         novo_atq = jogador['ataque'] + 2  
-        nova_def = jogador['defesa'] + 1  
+        nova_def = jogador['defesa'] + 2  
         
         # 2. Atualiza o banco com as novas colunas
         cursor.execute("""
@@ -587,35 +544,62 @@ def dar_xp_pet(user_id, item_nome, xp_por_unidade, qtd):
     return True, msg
 
 
-# --- ARQUIVO: .\database.py ---
 
-def set_level_admin(nick, novo_lvl):
-    """Força um nível específico e escala os atributos proporcionalmente para testes"""
+def curar_personagem_total(user_id):
+    """Restaura 100% da vida do jogador instantaneamente"""
     conn = conectar()
     cursor = conn.cursor()
+    # O SQL abaixo iguala a coluna 'vida' ao valor que estiver na 'vida_max'
+    cursor.execute("UPDATE personagens SET vida = vida_max WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
     
-    # Cálculos baseados na progressão do jogo:
-    # Vida: 100 + 20 por nível extra
-    nova_vida_max = 100 + (novo_lvl - 1) * 20
-    # Ataque: 10 + 2 por nível extra
-    novo_atq = 10 + (novo_lvl - 1) * 2
-    # Defesa: 5 + 1 por nível extra
-    nova_def = 5 + (novo_lvl - 1) * 1
     
-    try:
-        cursor.execute("""
-            UPDATE personagens 
-            SET level = ?, xp = 0, vida = ?, vida_max = ?, ataque = ?, defesa = ? 
-            WHERE nick = ?
-        """, (novo_lvl, nova_vida_max, nova_vida_max, novo_atq, nova_def, nick))
+def get_status_com_bonus(user_id):
+    """Calcula os status do jogador somando o bônus do pet equipado"""
+    jogador = get_jogador(user_id)
+    if not jogador or not jogador['pet_equipado']:
+        return jogador
+    
+    # Exemplo: Pet Tartaruga dá +10% de Defesa
+    if jogador['pet_nome'] == "Tartaruga filhote":
+        jogador['defesa'] = int(jogador['defesa'] * 1.10)
+    
+    # Adicione outros pets aqui conforme necessário
+    return jogador
+
+
+def get_jogador_com_bonus(user_id):
+    """Busca o jogador e aplica os bônus se o pet estiver equipado"""
+    jogador = get_jogador(user_id)
+    if jogador and jogador['pet_equipado'] == 1:
+        # Exemplo: Tartaruga = +10% Defesa
+        if jogador['pet_nome'] == "Tartaruga filhote":
+            jogador['defesa'] = int(jogador['defesa'] * 1.10)
+        # Exemplo: Lobo = +10% Ataque
+        elif jogador['pet_nome'] == "Lobo filhote":
+            jogador['ataque'] = int(jogador['ataque'] * 1.10)
+        # Exemplo: Falcão = +10% Agilidade (ou outro atributo)
+        elif jogador['pet_nome'] == "Falcão filhote":
+            pass # Adicione sua lógica aqui
+            
+    return jogador
+
+
+def aplicar_bonus_pet(jogador):
+    """Aplica o bônus se o pet estiver equipado e retorna o objeto modificado"""
+    print(f"DEBUG: Aplicando bônus para pet: {jogador.get('pet_nome')}, Equipado: {jogador.get('pet_equipado')}")
+    if jogador and jogador['pet_equipado'] == 1:
+        nome = jogador['pet_nome']
         
-        sucesso = cursor.rowcount > 0 # Verifica se algum nick foi alterado
-        conn.commit()
-        return sucesso
-    except Exception as e:
-        print(f"Erro ao definir nível: {e}")
-        return False
-    finally:
-        conn.close()
+        # 10% de bônus baseados nos status atuais
+        if nome == "Tartaruga filhote":
+            jogador['defesa_max'] += int(jogador['defesa_max'] * 0.10)
+        elif nome == "Lobo filhote":
+            jogador['ataque_max'] += int(jogador['ataque'] * 0.10)
+        elif nome == "Falcão filhote":
+            jogador['vida_max'] += int(jogador['vida'] * 0.10)
+            
+    return jogador
 
 

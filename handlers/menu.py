@@ -9,11 +9,12 @@ async def menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not nick:
         # Se não houver sessão, manda para o início
+        print("DEBUG MENU: Nick não encontrado na sessão!")
         if update.callback_query:
             await update.callback_query.answer("Sessão expirada!", show_alert=True)
         return
 
-    # 2. REDIRECIONAMENTO ÚNICO
-    # Em vez de desenhar botões aqui, mandamos para o exibir_mapa no ID 0 (Vila)
-    # Assim, o menu será SEMPRE o mesmo, vindo de qualquer lugar.
+    print("DEBUG MENU: Chamando exibir_mapa...")
     await exibir_mapa(update, context, 0)
+    print("DEBUG MENU: exibir_mapa finalizado.")
+    

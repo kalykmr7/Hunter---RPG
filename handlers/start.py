@@ -2,6 +2,7 @@
 
 import os
 import database
+from database import aplicar_bonus_pet
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 from modelos.monstros import sortear_pet
@@ -137,39 +138,37 @@ async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     user_id = query.from_user.id
-    jogador = database.get_jogador(user_id) 
+    # Pegamos o jogador e convertemos para dict para podermos aplicar os bônus
+    jogador_bruto = database.get_jogador(user_id) 
     
-    if not jogador or jogador["pet_nome"] is None:
+    if not jogador_bruto or not jogador_bruto["pet_nome"]:
         await query.edit_message_caption("❌ Você ainda não tem um pet.")
         return
-
-    # Busca XP necessário para o nível atual do pet
-    xp_prox_lvl = database.calcular_xp_pet(jogador['pet_level'])
     
-    itens = database.get_inventario(user_id)
-    item_maca = next((i for i in itens if i['item_nome'] == "Maçã"), None)
-    qtd_maca = item_maca['quantidade'] if item_maca else 0
+    # Aplica o bônus antes de exibir, se estiver equipado
+    jogador = aplicar_bonus_pet(dict(jogador_bruto))
 
     arquivo_imagem = jogador["pet_imagem"] if jogador["pet_imagem"] else "capa.png"
     caminho_foto = os.path.join('imagens', arquivo_imagem)
+    
+    # Status visual
+    status_eq = "✅ Equipado" if jogador['pet_equipado'] == 1 else "❌ Desequipado"
+    label_eq = "Desequipar" if jogador['pet_equipado'] == 1 else "Equipar"
 
+    # Exibe os status do JOGADOR com o bônus aplicado
     texto = (
-        f"🐾 Pet: {jogador['pet_nome']} (Lvl {jogador['pet_level']})\n\n"
-        f"✨ XP: {jogador['pet_xp']}/{xp_prox_lvl}\n"
-        f"❤️ Vida: {jogador['pet_vida']}\n"
-        f"⚔️ Ataque: {jogador['pet_ataque']}\n"
-        f"🛡️ Defesa: {jogador['pet_defesa']}\n"
-        f"⚡ Agilidade: {jogador['pet_agilidade']}"
+        f"🐾 Pet: {jogador['pet_nome']} (Lvl {jogador['pet_level']})\n"
+        f"Status: {status_eq}\n\n"
+        f"❤️ Vida Max: {jogador['vida_max']}\n"
+        f"⚔️ Ataque: {jogador['ataque']}\n"
+        f"🛡️ Defesa: {jogador['defesa']}\n\n"
+        "O pet equipado concede bônus passivos!"
     )
 
-    keyboard = []
-    botoes_alimento = []
-    if qtd_maca >= 1: botoes_alimento.append(InlineKeyboardButton("🍎 x1", callback_data="dar_maca_1"))
-    if qtd_maca >= 10: botoes_alimento.append(InlineKeyboardButton("🍎 x10", callback_data="dar_maca_10"))
-    if qtd_maca >= 20: botoes_alimento.append(InlineKeyboardButton("🍎 x20", callback_data="dar_maca_20"))
-    
-    if botoes_alimento: keyboard.append(botoes_alimento)
-    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
+    keyboard = [
+        [InlineKeyboardButton(f"{label_eq}", callback_data="equipar_pet")],
+        [InlineKeyboardButton("⬅ Voltar", callback_data="menu")]
+    ]
     
     try:
         with open(caminho_foto, 'rb') as foto:
@@ -178,7 +177,11 @@ async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
     except FileNotFoundError:
-        await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")  
+        await query.edit_message_caption(
+            caption=f"⚠️ Imagem não encontrada\n\n{texto}", 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode="Markdown"
+        )
         
     
 async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -255,3 +258,22 @@ async def dar_maca_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer(mensagem) 
     await pet(update, context) # Recarrega a tela do Pet
+    
+    
+async def equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    # Busca o estado atual no banco
+    jogador = database.get_jogador(user_id)
+    novo_estado = 1 if jogador['pet_equipado'] == 0 else 0
+    
+    # Atualiza no banco
+    conn = database.conectar()
+    conn.execute("UPDATE personagens SET pet_equipado = ? WHERE user_id = ?", (novo_estado, user_id))
+    conn.commit()
+    conn.close()
+    
+    await query.answer("Equipamento atualizado!")
+    # Recarrega a tela do pet
+    await pet(update, context)

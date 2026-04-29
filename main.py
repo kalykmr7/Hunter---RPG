@@ -1,5 +1,6 @@
 # Aqui é o motor do bot
 import database
+import admin
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import TOKEN
 from handlers import start, cadastro
@@ -14,7 +15,7 @@ def main():
     database.criar_tabela()
     database.popular_dados_iniciais()
     database.atualizar_estrutura_banco()
-    database.debug_tabela()
+    admin.debug_tabela()
     app = Application.builder().token(TOKEN).build()
 
     # Handlers (Ouvintes)
@@ -44,6 +45,8 @@ def main():
     app.add_handler(CallbackQueryHandler(caca.voltar_turno_luta, pattern="^voltar_turno_luta$"))
     app.add_handler(CallbackQueryHandler(mochila.ver_mochila, pattern="^mochila$"))
     app.add_handler(CallbackQueryHandler(start.dar_maca_pet, pattern="^dar_maca_"))
+    app.add_handler(CallbackQueryHandler(start.equipar_pet, pattern="^equipar_pet$"))
+    
     
     # ... outros handlers
 

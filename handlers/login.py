@@ -16,48 +16,56 @@ async def iniciar_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     
 async def processar_login(update, context):
-
     etapa = context.user_data.get("login_etapa")
-
-    print("🔥 LOGIN ETAPA:", etapa)
-    print("🔥 LOGIN CHAMADO")
-    print("ETAPA:", context.user_data.get("login_etapa"))
-    print("TEXTO:", update.message.text)
 
     # ETAPA 1: nick
     if etapa == "nick":
         context.user_data["login_nick"] = update.message.text
         context.user_data["login_etapa"] = "senha"
-
         await update.message.reply_text("🔑 Agora digite sua senha:")
         return
 
     # ETAPA 2: senha
     elif etapa == "senha":
         nick = context.user_data.get("login_nick")
-        senha = update.message.text
+        senha_digitada = update.message.text.strip()
 
         jogador = database.buscar_personagem_por_nick(nick)
+        
+        if not jogador:
+            print("DEBUG LOGIN: Jogador não encontrado.")
+            await update.message.reply_text("❌ Personagem não encontrado.")
+            return
 
-        # jogador[4] é onde está a senha no banco (de acordo com seu log)
-        if jogador and jogador[4] == senha:
-            # ✅ EM VEZ DE CLEAR, FAZEMOS ISSO:
-            # 1. Removemos apenas as chaves de controle do login
-            context.user_data.pop("login_etapa", None)
-            context.user_data.pop("login_nick", None)
-
-            # 2. CRIAMOS O CARIMBO DA SESSÃO (Essencial para o Menu)
-            context.user_data["personagem_logado"] = nick 
-
-            await update.message.reply_text(f"✅ Login OK! Bem-vindo, {nick}!")
-
-            # 3. Agora o menu vai funcionar porque o "personagem_logado" existe!
-            await menu.menu_principal(update, context)
+        print(f"DEBUG LOGIN: Jogador encontrado. Tipo de dado: {type(jogador)}")
+        
+        try:
+            # Vamos tentar acessar a senha de duas formas para garantir
+            senha_banco = None
             
-        else:
-            # Aqui tudo bem usar o clear se quiser resetar em caso de erro
-            context.user_data.clear()
-            await update.message.reply_text("❌ Dados inválidos (Nick ou Senha incorretos).")
+            # Tenta via Chave (sqlite3.Row)
+            try:
+                senha_banco = jogador['senha']
+                print(f"DEBUG LOGIN: Senha obtida via chave ['senha']: {senha_banco}")
+            except:
+                # Tenta via índice (caso a row_factory falhe)
+                senha_banco = jogador[4]
+                print(f"DEBUG LOGIN: Senha obtida via índice [4]: {senha_banco}")
+
+            if str(senha_banco) == str(senha_digitada):
+                print("DEBUG LOGIN: Senha confere! Logando...")
+                context.user_data.clear() 
+                context.user_data["personagem_logado"] = nick 
+                await update.message.reply_text(f"✅ Login OK! Bem-vindo, {nick}!")
+                await menu.menu_principal(update, context)
+            else:
+                print(f"DEBUG LOGIN: Senha incorreta. Banco: '{senha_banco}' vs Digitada: '{senha_digitada}'")
+                context.user_data.clear()
+                await update.message.reply_text("❌ Senha incorreta.")
+
+        except Exception as e:
+            print(f"DEBUG LOGIN: OCORREU UM ERRO GRAVE NO LOGIN: {e}")
+            await update.message.reply_text("❌ Erro interno no login. Verifique o console.")
             
 async def sair_conta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
