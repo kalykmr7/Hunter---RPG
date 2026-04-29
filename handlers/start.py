@@ -138,37 +138,43 @@ async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     user_id = query.from_user.id
-    # Pegamos o jogador e convertemos para dict para podermos aplicar os bônus
     jogador_bruto = database.get_jogador(user_id) 
     
     if not jogador_bruto or not jogador_bruto["pet_nome"]:
         await query.edit_message_caption("❌ Você ainda não tem um pet.")
         return
     
-    # Aplica o bônus antes de exibir, se estiver equipado
-    jogador = aplicar_bonus_pet(dict(jogador_bruto))
+    # Aplica o bônus
+    jogador = database.aplicar_bonus_pet(dict(jogador_bruto))
+
+    # Verifica quantas maçãs o jogador tem para o botão aparecer
+    itens = database.get_inventario(user_id)
+    qtd_maca = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
 
     arquivo_imagem = jogador["pet_imagem"] if jogador["pet_imagem"] else "capa.png"
     caminho_foto = os.path.join('imagens', arquivo_imagem)
     
-    # Status visual
     status_eq = "✅ Equipado" if jogador['pet_equipado'] == 1 else "❌ Desequipado"
     label_eq = "Desequipar" if jogador['pet_equipado'] == 1 else "Equipar"
 
-    # Exibe os status do JOGADOR com o bônus aplicado
     texto = (
         f"🐾 Pet: {jogador['pet_nome']} (Lvl {jogador['pet_level']})\n"
         f"Status: {status_eq}\n\n"
         f"❤️ Vida Max: {jogador['vida_max']}\n"
         f"⚔️ Ataque: {jogador['ataque']}\n"
         f"🛡️ Defesa: {jogador['defesa']}\n\n"
-        "O pet equipado concede bônus passivos!"
+        f"🍎 Maçãs disponíveis: {qtd_maca}"
     )
 
     keyboard = [
-        [InlineKeyboardButton(f"{label_eq}", callback_data="equipar_pet")],
-        [InlineKeyboardButton("⬅ Voltar", callback_data="menu")]
+        [InlineKeyboardButton(f"{label_eq}", callback_data="equipar_pet")]
     ]
+    
+    # Se tiver maçã, mostra o botão de alimentar
+    if qtd_maca > 0:
+        keyboard.append([InlineKeyboardButton(f"Alimentar", callback_data="alimentar_menu")])
+        
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
     
     try:
         with open(caminho_foto, 'rb') as foto:
@@ -237,27 +243,53 @@ async def login_diario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_caption(f"⏳ AVISO\n\n{mensagem}", reply_markup=reply_markup)
         
 
-async def dar_maca_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def alimentar_pet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostra opções de quantidade baseada no estoque de maçãs"""
     query = update.callback_query
+    await query.answer()
+    
     user_id = query.from_user.id
+    itens = database.get_inventario(user_id)
+    qtd_total = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
     
-    # O callback_data é "dar_maca_10". split("_") gera ['dar', 'maca', '10']
-    # O índice [2] é o '10'
-    try:
-        dados = query.data.split("_")
-        qtd = int(dados[2])
-    except (IndexError, ValueError):
-        qtd = 1
-
-    # CHAMADA IMPORTANTE: Certifique-se de que passa os 4 valores
-    sucesso, mensagem = database.dar_xp_pet(user_id, "Maçã", 10, qtd)
-    
-    if not sucesso:
-        await query.answer(mensagem, show_alert=True)
+    if qtd_total == 0:
+        await query.answer("Você não tem maçãs!", show_alert=True)
         return
 
-    await query.answer(mensagem) 
-    await pet(update, context) # Recarrega a tela do Pet
+    # Monta botões baseados no que o jogador possui
+    keyboard = []
+    
+    if qtd_total >= 1: keyboard.append([InlineKeyboardButton(" Alimentar com 1x", callback_data="exec_alim_1")])
+    if qtd_total >= 10: keyboard.append([InlineKeyboardButton(" Alimentar com 10x", callback_data="exec_alim_10")])
+    if qtd_total >= 20: keyboard.append([InlineKeyboardButton(" Alimentar com 20x", callback_data="exec_alim_20")])
+    if qtd_total > 1: keyboard.append([InlineKeyboardButton(f" Tudo ({qtd_total}x)", callback_data=f"exec_alim_{qtd_total}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅ Voltar ao Pet", callback_data="pet")])
+    
+    await query.edit_message_caption(
+        caption=f"Menu de Alimentação\n\nVocê possui {qtd_total} maçãs. Escolha quanto dar ao seu pet:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+    
+    
+async def executar_alimentar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe a escolha de quantidade e executa no banco"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    # Extrai o número do callback (exec_alim_X)
+    qtd = int(query.data.split("_")[2])
+    
+    sucesso, mensagem = database.dar_xp_pet(user_id, "Maçã", 10, qtd)
+    
+    # Resultado visual
+    await query.answer(f"{'Sucesso!' if sucesso else 'Erro!'}")
+    
+    # Mostra mensagem e volta pro menu pet
+    await pet(update, context)
+    
     
     
 async def equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):

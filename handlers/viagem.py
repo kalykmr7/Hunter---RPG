@@ -102,19 +102,24 @@ async def exibir_mapa(update, context, mapa_id):
 
     keyboard = []
     
+    # 1. Botões de Ação do Mapa (Diferenciam a Vila de Áreas de Caça)
     if mapa_id == 0:
         texto = f"🏰 MENU PRINCIPAL\n\n👤 {jogador['nick']}\n📍 Localização: {nome_mapa}"
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
-        keyboard.append([InlineKeyboardButton("📊 Status", callback_data="status")])
         keyboard.append([InlineKeyboardButton("🎁 Login Diário", callback_data="login_diario")])
-        # Correção aqui: Acesso via ['coluna'] em vez de .get('coluna')
-        if jogador['pet_nome']:
-            keyboard.append([InlineKeyboardButton("🐾 Pet", callback_data="pet")])
-            
     else:
-        texto = f"📍 {mapa_info.get('descricao', 'Um lugar aparentemente tranquilo e seguro...')}"
+        texto = f"📍 {mapa_info.get('descricao', 'Um lugar perigoso...')}\n\nVocê está em: {nome_mapa}"
         keyboard.append([InlineKeyboardButton("⚔️ Caçar", callback_data=f"procurar_{mapa_id}")])
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
+    
+    # 2. Botões Utilitários (Corrigido o acesso ao 'pet_nome')
+    botoes_utilitarios = [InlineKeyboardButton("📊 Status", callback_data="status")]
+    
+    # ACESSO CORRIGIDO: sqlite3.Row usa [] e não .get()
+    if jogador['pet_nome']:
+        botoes_utilitarios.append(InlineKeyboardButton("🐾 Pet", callback_data="pet"))
+    
+    keyboard.append(botoes_utilitarios)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     

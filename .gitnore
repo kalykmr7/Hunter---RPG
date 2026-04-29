@@ -1,3 +1,4 @@
+__pycache__/
+*.pyc
 config.py
-hunter_game.db
-__pycache__
+*.db

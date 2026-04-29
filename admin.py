@@ -1,8 +1,9 @@
-# --- ARQUIVO: .\admin.py ---
+
 import database
 
 def set_level_admin(nick, novo_lvl):
     """Força um nível específico e escala os atributos proporcionalmente para testes"""
+    # Comando no bot: set_level [nick] [numero]
     conn = database.conectar()
     cursor = conn.cursor()
     
@@ -34,3 +35,5 @@ def debug_tabela():
     cursor.execute("PRAGMA table_info(personagens)")
     print("COLUNAS:", cursor.fetchall())
     conn.close()
+    
+    

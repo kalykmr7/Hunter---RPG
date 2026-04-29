@@ -5,17 +5,17 @@
 LISTA_MONSTROS_MESTRE = [
     # MAPA 1: Acampamento do Pioneiro (Lvl 1)
     ('Borboleta', 1, 25, 5, 1, 12, 8, 'borboleta.png'),
-    ('Centopéia', 1, 30, 6, 2, 15, 10, 'centopeia.png'),
-    ('Grilo', 1, 20, 4, 1, 10, 5, 'grilo.png'),
-    ('Barata', 1, 35, 7, 2, 18, 12, 'barata.png'),
-    ('Aranha', 1, 45, 9, 3, 25, 20, 'aranha.png'),
+    ('Centopéia', 1, 26, 6, 2, 15, 10, 'centopeia.png'),
+    ('Grilo', 1, 27, 4, 1, 10, 5, 'grilo.png'),
+    ('Barata', 1, 28, 7, 2, 18, 12, 'barata.png'),
+    ('Aranha', 1, 30, 9, 3, 25, 20, 'aranha.png'),
 
     # MAPA 2: Bosque Queimado (Lvl 4)
-    ('Cinzelha', 2, 60, 15, 5, 40, 30, 'cinzelha.png'),
-    ('Lobo Calcinado', 2, 80, 18, 6, 50, 40, 'lobo_calcinado.png'),
-    ('Tronco Fumegante', 2, 100, 12, 10, 55, 45, 'tronco.png'),
-    ('Mariposa de Fuligem', 2, 55, 22, 3, 45, 35, 'mariposa.png'),
-    ('Serpe Braseira', 2, 120, 25, 8, 70, 60, 'serpe_braseira.png'),
+    ('Cinzelha', 2, 60, 15, 5, 40, 30, 'cinzelha.jpg'),
+    ('Lobo Calcinado', 2, 80, 18, 6, 50, 40, 'lobo_calcinado.jpg'),
+    ('Tronco Fumegante', 2, 100, 12, 10, 55, 45, 'tronco.jpg'),
+    ('Mariposa de Fuligem', 2, 55, 22, 3, 45, 35, 'mariposa.jpg'),
+    ('Serpe Braseira', 2, 120, 25, 8, 70, 60, 'naja.jpg'),
 
     # MAPA 3: Ponte dos Suspiros (Lvl 6)
     ('Eco Perdido', 3, 110, 30, 10, 85, 70, 'eco_perdido.png'),

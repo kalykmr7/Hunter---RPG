@@ -12,6 +12,7 @@ LISTA_ITENS_MESTRE = [
     # EQUIPAMENTOS (Armas e Armaduras)
     ('Espada de Madeira', 'equipamento', 'arma', 5, 'Uma espada simples (+5 Atq).', 100),
     ('Armadura de Couro', 'equipamento', 'armadura', 3, 'Proteção básica (+3 Def).', 120),
+    ('Facão', 'equipamento', 'arma', 10, 'Uma lâmina de corte pesado (+10 Atq).', 200),
     
     # MATERIAIS E DROPS (Para venda ou quests futuras)
     ('Osso Antigo', 'material', 'venda', 0, 'Um osso velho que pode ser vendido.', 15),
