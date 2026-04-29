@@ -10,6 +10,7 @@ from handlers import status as handler_status
 from handlers import viagem, caca, mochila
 
 print('Bot Online!')
+print("Bot iniciado - Versão 1.0.2")
 
 def main():
     database.criar_tabela()
