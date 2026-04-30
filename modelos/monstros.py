@@ -32,3 +32,12 @@ pets = [
 def sortear_pet():
     return random.choice(pets)
 
+
+
+def buscar_modelo_pet(nome_procurado):
+    """Procura um pet na lista de modelos pelo nome exato"""
+    for p in pets:
+        if p['nome'].lower() == nome_procurado.lower():
+            return p
+    return None
+

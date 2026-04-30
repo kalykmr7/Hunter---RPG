@@ -53,6 +53,24 @@ def criar_tabela():
             mochila_slots INTEGER DEFAULT 10
         )
     ''')
+    
+    # Tabela de Pets dos Jogadores (Permite múltiplos pets por usuário)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pets_jogador (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            nome TEXT,
+            level INTEGER DEFAULT 1,
+            xp INTEGER DEFAULT 0,
+            vida INTEGER,
+            ataque INTEGER,
+            defesa INTEGER,
+            agilidade INTEGER,
+            imagem TEXT,
+            equipado INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES personagens(user_id)
+        )
+    ''')
 
     # 2. Tabela de Inventário
     cursor.execute('''
@@ -587,19 +605,100 @@ def get_jogador_com_bonus(user_id):
 
 
 def aplicar_bonus_pet(jogador):
-    """Aplica o bônus se o pet estiver equipado e retorna o objeto modificado"""
-    print(f"DEBUG: Aplicando bônus para pet: {jogador.get('pet_nome')}, Equipado: {jogador.get('pet_equipado')}")
-    if jogador and jogador['pet_equipado'] == 1:
-        nome = jogador['pet_nome']
+    """Aplica o bônus de 10% nos atributos corretos se o pet estiver equipado"""
+    # Verificamos se o jogador existe e se o pet_equipado está como 1
+    if jogador and jogador.get('pet_equipado') == 1:
+        nome_pet = jogador.get('pet_nome')
         
-        # 10% de bônus baseados nos status atuais
-        if nome == "Tartaruga filhote":
-            jogador['defesa_max'] += int(jogador['defesa_max'] * 0.10)
-        elif nome == "Lobo filhote":
-            jogador['ataque_max'] += int(jogador['ataque'] * 0.10)
-        elif nome == "Falcão filhote":
-            jogador['vida_max'] += int(jogador['vida'] * 0.10)
+        # 10% de bônus baseados nos status atuais do jogador
+        if nome_pet == "Tartaruga filhote":
+            # Aumenta a Defesa (usamos a chave 'defesa' que existe no banco)
+            jogador['defesa'] = int(jogador['defesa'] * 1.10)
+            
+        elif nome_pet == "Lobo filhote":
+            # Aumenta o Ataque (usamos a chave 'ataque' que existe no banco)
+            jogador['ataque'] = int(jogador['ataque'] * 1.10)
+            
+        elif nome_pet == "Falcão filhote":
+            # Aumenta a Vida Máxima (usamos a chave 'vida_max' que existe no banco)
+            jogador['vida_max'] = int(jogador['vida_max'] * 1.10)
             
     return jogador
 
+
+def get_pets_jogador(user_id):
+    """Busca todos os pets que o jogador possui"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM pets_jogador WHERE user_id = ?", (user_id,))
+    pets = cursor.fetchall()
+    conn.close()
+    return pets
+
+def equipar_pet_db(user_id, pet_id):
+    """Equipa um pet e atualiza a tabela personagens para manter a UI funcionando"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # 1. Desequipa todos na tabela de pets
+    cursor.execute("UPDATE pets_jogador SET equipado = 0 WHERE user_id = ?", (user_id,))
+    
+    # 2. Equipa o pet alvo
+    cursor.execute("UPDATE pets_jogador SET equipado = 1 WHERE id = ? AND user_id = ?", (pet_id, user_id))
+    
+    # 3. BUSCA OS DADOS DO NOVO PET PARA SINCRONIZAR
+    cursor.execute("SELECT nome, imagem FROM pets_jogador WHERE id = ?", (pet_id,))
+    pet_info = cursor.fetchone()
+    
+    if pet_info:
+        # Atualiza a tabela personagens (Onde a função exibir_mapa olha)
+        cursor.execute("""
+            UPDATE personagens 
+            SET pet_nome = ?, pet_imagem = ?, pet_equipado = 1 
+            WHERE user_id = ?
+        """, (pet_info['nome'], pet_info['imagem'], user_id))
+        
+    conn.commit()
+    conn.close()
+    return True
+
+
+def adicionar_novo_pet(user_id, pet_modelo):
+    """Adiciona um pet novo e sincroniza com a tabela personagens se for o primeiro"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Verifica se é o primeiro pet do jogador
+    cursor.execute("SELECT COUNT(*) as total FROM pets_jogador WHERE user_id = ?", (user_id,))
+    total = cursor.fetchone()['total']
+    primeiro = 1 if total == 0 else 0
+    
+    # 1. Insere na tabela de coleção
+    cursor.execute("""
+        INSERT INTO pets_jogador (user_id, nome, vida, ataque, defesa, agilidade, imagem, equipado)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, pet_modelo['nome'], pet_modelo['vida'], pet_modelo['ataque'], 
+          pet_modelo['defesa'], pet_modelo['agilidade'], pet_modelo['imagem'], primeiro))
+    
+    # 2. SE FOR O PRIMEIRO: Sincroniza com a tabela 'personagens' para os botões aparecerem
+    if primeiro:
+        cursor.execute("""
+            UPDATE personagens 
+            SET pet_nome = ?, pet_imagem = ?, pet_equipado = 1 
+            WHERE user_id = ?
+        """, (pet_modelo['nome'], pet_modelo['imagem'], user_id))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_pet_por_id(pet_id):
+    """Busca os detalhes de um pet específico na tabela pets_jogador"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM pets_jogador WHERE id = ?", (pet_id,))
+    pet = cursor.fetchone()
+    conn.close()
+    return pet
 

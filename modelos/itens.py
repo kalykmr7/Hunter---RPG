@@ -19,3 +19,12 @@ LISTA_ITENS_MESTRE = [
     ('Essência Mágica', 'material', 'venda', 0, 'Fragmento de energia pura.', 50),
     ('Pena de Wyvern', 'material', 'venda', 0, 'Uma pena rígida e valiosa.', 100),
 ]
+
+def buscar_dados_item(nome_item):
+    """Procura o item na lista mestre e retorna seus dados (especialmente o tipo)"""
+    from modelos.itens import LISTA_ITENS_MESTRE
+    for item in LISTA_ITENS_MESTRE:
+        # item[0] é o Nome, item[1] é o Tipo
+        if item[0].lower() == nome_item.lower():
+            return {"nome": item[0], "tipo": item[1]}
+    return None

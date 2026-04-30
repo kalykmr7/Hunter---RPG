@@ -3,52 +3,75 @@ import handlers.cadastro as cadastro
 import handlers.login as login
 import database
 import admin
+from modelos.monstros import buscar_modelo_pet
+from modelos.itens import buscar_dados_item
 
 ADMIN_ID = 5386405631  
+
 
 async def processar_texto(update, context):
     user_id = update.effective_user.id
     texto = update.message.text
-
-    # --- COMANDO DE ADMIN ---
     comando_limpo = texto.lower()
-    if (comando_limpo.startswith("dar ") or comando_limpo.startswith("/dar ")) and user_id == ADMIN_ID:
-        # ... (seu código de dar item continua igual)
-        pass 
 
-    # --- COMANDO ADMIN: /set_level ---
-    if (comando_limpo.startswith("set_level ") or comando_limpo.startswith("/set_level ")) and user_id == ADMIN_ID:
-        # Divide a mensagem: ['/set_level', 'nick_do_usuario', 'novo_nivel']
+    # --- COMANDO ADMIN: /dar [NICK] [QTD] [NOME] ---
+    if (comando_limpo.startswith("dar ") or comando_limpo.startswith("/dar ")) and user_id == ADMIN_ID:
         partes = texto.split()
         
-        if len(partes) < 3:
-            await update.message.reply_text("⚠️ Formato incorreto. Use: /set_level [NICK] [NIVEL]")
+        if len(partes) < 4:
+            await update.message.reply_text("⚠️ Use: `/dar [NICK] [QTD] [NOME]`\nEx: `/dar Recruta 10 Maçã`", parse_mode="Markdown")
             return
 
         nick_alvo = partes[1]
         try:
-            nivel_novo = int(partes[2])
-            # Chama a função que importamos lá em cima no admin.py
-            sucesso = admin.set_level_admin(nick_alvo, nivel_novo)
-            
-            if sucesso:
-                await update.message.reply_text(f"✅ Sucesso! O jogador {nick_alvo} agora está no Nível {nivel_novo}.")
-            else:
-                await update.message.reply_text(f"❌ Erro: Jogador '{nick_alvo}' não encontrado.")
+            quantidade = int(partes[2])
         except ValueError:
-            await update.message.reply_text("⚠️ O nível deve ser um número inteiro.")
+            await update.message.reply_text("❌ A quantidade deve ser um número.")
+            return
+            
+        nome_item = " ".join(partes[3:]) # Pega o resto como nome do item
+
+        # 1. Verifica se o jogador existe
+        jogador = database.buscar_personagem_por_nick(nick_alvo)
+        if not jogador:
+            await update.message.reply_text(f"❌ Jogador '{nick_alvo}' não encontrado.")
+            return
+
+        # 2. Verifica se o item existe na lista mestre
+        dados_item = buscar_dados_item(nome_item)
+        if not dados_item:
+            await update.message.reply_text(f"❌ Item '{nome_item}' não existe no jogo.")
+            return
+
+        # 3. Adiciona ao inventário no banco
+        sucesso, msg = database.adicionar_item_inventario(
+            jogador['user_id'], 
+            dados_item['nome'], 
+            dados_item['tipo'], 
+            quantidade
+        )
+
+        if sucesso:
+            await update.message.reply_text(f"✅ Feito! {quantidade}x {dados_item['nome']} enviados para {nick_alvo}.")
+        else:
+            await update.message.reply_text(f"⚠️ Ocorreu um problema: {msg}")
         return
 
-    # --- LÓGICA DE LOGIN ---
+    # --- COMANDO ADMIN: /darpet ---
+    if (comando_limpo.startswith("darpet ") or comando_limpo.startswith("/darpet ")) and user_id == ADMIN_ID:
+        # (Mantenha a lógica do darpet que fizemos antes aqui)
+        pass
+
+    # --- COMANDO ADMIN: /set_level ---
+    if (comando_limpo.startswith("set_level ") or comando_limpo.startswith("/set_level ")) and user_id == ADMIN_ID:
+        # (Mantenha a sua lógica de set_level aqui)
+        pass
+
+    # --- LÓGICA DE LOGIN/CADASTRO ---
     if context.user_data.get("login_etapa"):
-        print("DEBUG ROTEADOR: Identificado etapa de login, chamando login.processar_login")
         await login.processar_login(update, context)
         return
 
-    # --- LÓGICA DE CADASTRO ---
     if context.user_data.get("esperando_nick") or context.user_data.get("esperando_senha"):
-        print("DEBUG ROTEADOR: Identificado etapa de cadastro, chamando cadastro.processar_texto_cadastro")
         await cadastro.processar_texto_cadastro(update, context)
         return
-        
-    print("DEBUG ROTEADOR: Nenhuma etapa de login ou cadastro encontrada.")

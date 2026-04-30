@@ -46,7 +46,7 @@ async def mostrar_mapas(update, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
     
     texto = (
-        "🗺 SISTEMA DE VIAGEM\n\n"
+        "🗺 Sistema de viajem\n\n"
         f"Lvl: ⭐ Lvl {lvl_atual}\n"
         "Selecione um destino abaixo:"
     )
@@ -80,42 +80,59 @@ async def manter_local(update, context: ContextTypes.DEFAULT_TYPE):
     )
     
 async def exibir_mapa(update, context, mapa_id):
+    """Exibe a interface do mapa atual com sua descrição única e botões de ação"""
     user_id = update.effective_user.id 
     query = getattr(update, "callback_query", None)
     
-    print(f"DEBUG VIAGEM: Entrando em exibir_mapa. ID: {mapa_id}")
-    
+    # Cura e Atualiza Localização
     database.curar_personagem_total(user_id)
     database.atualizar_mapa_personagem(user_id, mapa_id)
+    
     jogador = database.get_jogador(user_id)
+    if not jogador: return
 
-    if not jogador:
-        return
-
+    # Busca as informações do mapa na nossa lista de modelos
     mapa_info = next((m for m in lista_mapas if m["id"] == mapa_id), None)
-    if not mapa_info:
-        return
+    if not mapa_info: return
 
     nome_mapa = mapa_info.get('nome', 'Área Desconhecida')
+    # Pegamos a descrição única que acabamos de criar
+    descricao_mapa = mapa_info.get('descricao', )
+    
     imagem_nome = mapa_info.get('imagem', 'capa.png')
     caminho_img = os.path.join("imagens", imagem_nome)
+    
+    if jogador['pet_equipado'] == 1 and jogador['pet_nome']:
+        status_pet = f"{jogador['pet_nome']}"
+    else:
+        status_pet = "❌ Nenhum"
 
     keyboard = []
     
-    # 1. Botões de Ação do Mapa (Diferenciam a Vila de Áreas de Caça)
+    # Montagem do Texto e Botões baseada no Tipo de Mapa
     if mapa_id == 0:
-        texto = f"🏰 MENU PRINCIPAL\n\n👤 {jogador['nick']}\n📍 Localização: {nome_mapa}"
+        # Layout para a Vila/Lobby
+        texto = (
+            f"🏰 {nome_mapa}\n"
+            f"_{descricao_mapa}_\n\n"
+            f"👤 Caçador: {jogador['nick']}\n"
+            f"💰 Gold: {jogador['gold']}\n"
+            f"🐾 Pet equipado: {status_pet}"
+        )
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
         keyboard.append([InlineKeyboardButton("🎁 Login Diário", callback_data="login_diario")])
     else:
-        texto = f"📍 {mapa_info.get('descricao', 'Um lugar perigoso...')}\n\nVocê está em: {nome_mapa}"
+        # Layout para Áreas de Caça
+        texto = (
+            f"📍 *{nome_mapa}*\n"
+            f"_{descricao_mapa}_\n\n"
+            f"O que deseja fazer agora?"
+        )
         keyboard.append([InlineKeyboardButton("⚔️ Caçar", callback_data=f"procurar_{mapa_id}")])
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
     
-    # 2. Botões Utilitários (Corrigido o acesso ao 'pet_nome')
+    # Botões fixos de utilidade
     botoes_utilitarios = [InlineKeyboardButton("📊 Status", callback_data="status")]
-    
-    # ACESSO CORRIGIDO: sqlite3.Row usa [] e não .get()
     if jogador['pet_nome']:
         botoes_utilitarios.append(InlineKeyboardButton("🐾 Pet", callback_data="pet"))
     
@@ -124,17 +141,23 @@ async def exibir_mapa(update, context, mapa_id):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        with open(caminho_img, "rb") as foto:
-            if query:
-                await query.answer()
-                await query.edit_message_media(media=InputMediaPhoto(media=foto, caption=texto), reply_markup=reply_markup)
-            else:
-                await update.message.reply_photo(photo=foto, caption=texto, reply_markup=reply_markup)
-    except FileNotFoundError:
         if query:
-            await query.edit_message_caption(caption=texto, reply_markup=reply_markup)
+            await query.answer()
+            with open(caminho_img, "rb") as foto:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"), 
+                    reply_markup=reply_markup
+                )
         else:
-            await update.message.reply_text(text=texto, reply_markup=reply_markup)
+            with open(caminho_img, "rb") as foto:
+                await update.message.reply_photo(photo=foto, caption=texto, reply_markup=reply_markup, parse_mode="Markdown")
+    except FileNotFoundError:
+        aviso = f"{texto}\n\n⚠️ (Imagem {imagem_nome} não encontrada)"
+        if query:
+            await query.edit_message_caption(caption=aviso, reply_markup=reply_markup, parse_mode="Markdown")
+        else:
+            await update.message.reply_text(text=aviso, reply_markup=reply_markup, parse_mode="Markdown")
+            
             
         
 async def entrar_no_mapa(update, context: ContextTypes.DEFAULT_TYPE):

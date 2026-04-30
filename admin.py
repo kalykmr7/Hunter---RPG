@@ -3,7 +3,14 @@ import database
 
 def set_level_admin(nick, novo_lvl):
     """Força um nível específico e escala os atributos proporcionalmente para testes"""
-    # Comando no bot: set_level [nick] [numero]
+    # Comando no bot: set_level [nick] [numero] >> para dar lvl ao personagem
+    # Comando no bot: darpet [nick] [nome do pet] >> para dar um dos pets
+    #Como usar o comando agora:
+    #Com o bot ligado (no VS Code ou Nuvem), digite:
+    #/dar Recruta 50 Maçã (Dará 50 maçãs ao jogador Recruta).
+    #/dar Recruta 1 Poção pequena (Dará uma poção).
+    #/dar Recruta 1 Espada de Madeira (Dará a espada).
+    
     conn = database.conectar()
     cursor = conn.cursor()
     

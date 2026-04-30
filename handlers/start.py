@@ -86,118 +86,67 @@ async def resgatar_presente(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chocar_ovo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
+    
+    from modelos.monstros import sortear_pet
     pet = sortear_pet() 
 
-    conn = database.conectar()
-    cursor = conn.cursor()
+    # Adiciona à nova tabela de pets
+    database.adicionar_novo_pet(user_id, pet)
     
-    # Organizei o SQL para ficar fácil de ler: 7 campos = 7 interrogações
-    cursor.execute("""
-        UPDATE personagens 
-        SET jogo_iniciado = 1, 
-            pet_nome = ?, 
-            pet_vida = ?, 
-            pet_ataque = ?, 
-            pet_defesa = ?, 
-            pet_agilidade = ?, 
-            pet_imagem = ?, 
-            mapa_atual = 0
-        WHERE user_id = ?
-    """, (
-        pet["nome"], 
-        pet["vida"], 
-        pet["ataque"], 
-        pet["defesa"], 
-        pet["agilidade"], 
-        pet["imagem"], 
-        user_id
-    ))
+    # Marca que o jogo iniciou na tabela principal
+    conn = database.conectar()
+    conn.execute("UPDATE personagens SET jogo_iniciado = 1 WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
     caminho_foto_pet = os.path.join('imagens', pet["imagem"])
-    
     texto_sucesso = (
         f"🎉 O OVO CHOCOU!\n\n"
-        f"🐾 Seu novo companheiro: {pet['nome']}\n"
-        f"⚔️ Status: Atk {pet['ataque']} | Def {pet['defesa']}\n\n"
-        f"Agora você pode explorar o universo de Hunter!"
+        f"🐾 Você obteve: {pet['nome']}\n"
+        f"Ele foi adicionado à sua coleção! Você pode gerenciar seus pets no menu de Pet."
     )
 
     keyboard = [[InlineKeyboardButton("🏰 Menu Principal", callback_data="menu_principal")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     try:
         with open(caminho_foto_pet, 'rb') as foto:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=foto, caption=texto_sucesso),
-                reply_markup=reply_markup
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
     except FileNotFoundError:
-        await query.edit_message_caption(
-            caption=f"⚠️ (Imagem {pet['imagem']} não encontrada)\n\n{texto_sucesso}",
-            reply_markup=reply_markup
-        )
+        await query.edit_message_caption(caption=texto_sucesso, reply_markup=InlineKeyboardMarkup(keyboard))
 
     
 async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
-    jogador_bruto = database.get_jogador(user_id) 
     
-    if not jogador_bruto or not jogador_bruto["pet_nome"]:
-        await query.edit_message_caption("❌ Você ainda não tem um pet.")
+    pets = database.get_pets_jogador(user_id)
+    
+    if not pets:
+        await query.edit_message_caption("❌ Você ainda não tem pets.")
         return
+
+    texto = "🐾 *SUA COLEÇÃO DE PETS*\n\nEscolha um pet para ver detalhes ou equipar:\n"
+    keyboard = []
     
-    # Aplica o bônus
-    jogador = database.aplicar_bonus_pet(dict(jogador_bruto))
-
-    # Verifica quantas maçãs o jogador tem para o botão aparecer
-    itens = database.get_inventario(user_id)
-    qtd_maca = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
-
-    arquivo_imagem = jogador["pet_imagem"] if jogador["pet_imagem"] else "capa.png"
-    caminho_foto = os.path.join('imagens', arquivo_imagem)
+    for p in pets:
+        status = "✅" if p['equipado'] else "💤"
+        keyboard.append([InlineKeyboardButton(
+            f"{status} {p['nome']} (Lvl {p['level']})", 
+            callback_data=f"ver_pet_{p['id']}"
+        )])
     
-    status_eq = "✅ Equipado" if jogador['pet_equipado'] == 1 else "❌ Desequipado"
-    label_eq = "Desequipar" if jogador['pet_equipado'] == 1 else "Equipar"
-
-    texto = (
-        f"🐾 Pet: {jogador['pet_nome']} (Lvl {jogador['pet_level']})\n"
-        f"Status: {status_eq}\n\n"
-        f"❤️ Vida Max: {jogador['vida_max']}\n"
-        f"⚔️ Ataque: {jogador['ataque']}\n"
-        f"🛡️ Defesa: {jogador['defesa']}\n\n"
-        f"🍎 Maçãs disponíveis: {qtd_maca}"
-    )
-
-    keyboard = [
-        [InlineKeyboardButton(f"{label_eq}", callback_data="equipar_pet")]
-    ]
-    
-    # Se tiver maçã, mostra o botão de alimentar
-    if qtd_maca > 0:
-        keyboard.append([InlineKeyboardButton(f"Alimentar", callback_data="alimentar_menu")])
-        
     keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
     
-    try:
-        with open(caminho_foto, 'rb') as foto:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-    except FileNotFoundError:
-        await query.edit_message_caption(
-            caption=f"⚠️ Imagem não encontrada\n\n{texto}", 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode="Markdown"
-        )
-        
+    await query.edit_message_caption(
+        caption=texto, 
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
     
 async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -318,3 +267,74 @@ async def equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer("Equipamento atualizado!")
     # Recarrega a tela do pet
     await pet(update, context)
+    
+    
+async def ver_detalhes_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exibe os detalhes de um pet específico da coleção"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Extrai o ID do pet do callback (ex: ver_pet_5 -> 5)
+    pet_id = int(query.data.split("_")[2])
+    pet = database.get_pet_por_id(pet_id)
+    user_id = query.from_user.id
+    
+    if not pet:
+        await query.edit_message_caption("❌ Pet não encontrado.")
+        return
+
+    # Verifica se tem maçãs para mostrar o botão alimentar
+    itens = database.get_inventario(user_id)
+    qtd_maca = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
+
+    status_eq = "✅ Equipado" if pet['equipado'] else [ ]
+    
+    texto = (
+        f"🐾 Detalhes do pet:\n\n"
+        f"Nome: {pet['nome']}\n"
+        f"Nível: {pet['level']}\n"
+        f"Status: {status_eq}\n\n"
+        f"❤️ Vida: {pet['vida']}\n"
+        f"⚔️ Ataque: {pet['ataque']}\n"
+        f"🛡️ Defesa: {pet['defesa']}\n"
+        f"⚡ Agilidade: {pet['agilidade']}\n\n"
+        f"🍎 Suas maçãs: {qtd_maca}"
+    )
+
+    keyboard = []
+    
+    # Se não estiver equipado, mostra o botão para equipar
+    if not pet['equipado']:
+        keyboard.append([InlineKeyboardButton("⚔️ Equipar este Pet", callback_data=f"equipar_pet_{pet_id}")])
+    
+    # Botão de alimentar (usamos o ID do pet agora para o XP ir para o lugar certo!)
+    if qtd_maca > 0:
+        keyboard.append([InlineKeyboardButton("🍎 Alimentar", callback_data=f"alimentar_menu_{pet_id}")])
+        
+    keyboard.append([InlineKeyboardButton("⬅ Voltar para Lista", callback_data="pet")])
+    
+    caminho_foto = os.path.join('imagens', pet['imagem'])
+    
+    try:
+        with open(caminho_foto, 'rb') as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except FileNotFoundError:
+        await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def executar_equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processa a troca de pet ativo"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    pet_id = int(query.data.split("_")[2])
+    
+    # Chama a função do banco que criamos no passo anterior
+    database.equipar_pet_db(user_id, pet_id)
+    
+    await query.answer("🐾 Pet equipado com sucesso!", show_alert=True)
+    
+    # Volta para os detalhes do pet atualizado
+    await ver_detalhes_pet(update, context)
+    
