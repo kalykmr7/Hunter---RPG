@@ -10,8 +10,9 @@ from handlers.menu import menu_principal
 from handlers import viagem
 
 async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+    # Log de diagnóstico
     user_id = update.effective_user.id
+    print(f"DEBUG: Comando /start recebido do user {user_id}")
     
     database.resetar_localizacao(user_id)
     
@@ -23,22 +24,30 @@ async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     texto = "Bem-vindo ao Reino de Hunter 🏰\nSua jornada começa agora."
 
+    # IMPORTANTE: Verifique se a pasta se chama 'imagens' (minúsculo) no GitHub
     caminho_imagem = os.path.join("imagens", "capa.png")
 
     try:
-        with open(caminho_imagem, "rb") as foto:
-            await update.effective_chat.send_photo(
-                photo=foto,
-                caption=texto,
+        if os.path.exists(caminho_imagem):
+            with open(caminho_imagem, "rb") as foto:
+                await update.effective_chat.send_photo(
+                    photo=foto,
+                    caption=texto,
+                    reply_markup=reply_markup
+                )
+        else:
+            print(f"DEBUG: Arquivo não encontrado em {caminho_imagem}")
+            await update.effective_chat.send_message(
+                text=texto + "\n\n⚠️ (Imagem não encontrada no servidor)",
                 reply_markup=reply_markup
             )
 
-    except FileNotFoundError:
+    except Exception as e:
+        print(f"ERRO CRÍTICO NO START: {e}")
         await update.effective_chat.send_message(
-            texto + "\n\n⚠️ (Imagem não encontrada)",
+            text=f"Erro ao iniciar o bot: {e}",
             reply_markup=reply_markup
         )
 

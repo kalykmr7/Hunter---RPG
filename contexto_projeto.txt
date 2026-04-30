@@ -39,13 +39,7 @@ def debug_tabela():
     conn.close()
     
     
-def debug_tabela():
-    """Função de debug para verificar estrutura do banco"""
-    conn = database.conectar()
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(personagens)")
-    print("COLUNAS:", cursor.fetchall())
-    conn.close()
+
 
 --- ARQUIVO: .\config.py ---
 # Token e configurações gerais
@@ -672,8 +666,11 @@ from handlers import perfil, menu
 from handlers import login, router
 from handlers import status as handler_status
 from handlers import viagem, caca, mochila
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 print('Bot Online!')
+print("Bot iniciado - Versão 1.0.2")
 
 def main():
     database.criar_tabela()
@@ -708,12 +705,13 @@ def main():
     app.add_handler(CallbackQueryHandler(caca.confirmar_cura_luta, pattern="^itemluta_"))
     app.add_handler(CallbackQueryHandler(caca.voltar_turno_luta, pattern="^voltar_turno_luta$"))
     app.add_handler(CallbackQueryHandler(mochila.ver_mochila, pattern="^mochila$"))
-    app.add_handler(CallbackQueryHandler(start.dar_maca_pet, pattern="^dar_maca_"))
     app.add_handler(CallbackQueryHandler(start.equipar_pet, pattern="^equipar_pet$"))
+    app.add_handler(CallbackQueryHandler(start.alimentar_pet_menu, pattern="^alimentar_menu$"))
+    app.add_handler(CallbackQueryHandler(start.executar_alimentar, pattern="^exec_alim_"))
     
     
     # ... outros handlers
-
+    print("Bot aguardando mensagens...")
     app.run_polling()
 
 if __name__ == '__main__':
@@ -1582,7 +1580,7 @@ async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Se tiver maçã, mostra o botão de alimentar
     if qtd_maca > 0:
-        keyboard.append([InlineKeyboardButton(f"Alimentar", callback_data="alimentar_pet")])
+        keyboard.append([InlineKeyboardButton(f"Alimentar", callback_data="alimentar_menu")])
         
     keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
     
@@ -1653,27 +1651,53 @@ async def login_diario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_caption(f"⏳ AVISO\n\n{mensagem}", reply_markup=reply_markup)
         
 
-async def dar_maca_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def alimentar_pet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostra opções de quantidade baseada no estoque de maçãs"""
     query = update.callback_query
+    await query.answer()
+    
     user_id = query.from_user.id
+    itens = database.get_inventario(user_id)
+    qtd_total = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
     
-    # O callback_data é "dar_maca_10". split("_") gera ['dar', 'maca', '10']
-    # O índice [2] é o '10'
-    try:
-        dados = query.data.split("_")
-        qtd = int(dados[2])
-    except (IndexError, ValueError):
-        qtd = 1
-
-    # CHAMADA IMPORTANTE: Certifique-se de que passa os 4 valores
-    sucesso, mensagem = database.dar_xp_pet(user_id, "Maçã", 10, qtd)
-    
-    if not sucesso:
-        await query.answer(mensagem, show_alert=True)
+    if qtd_total == 0:
+        await query.answer("Você não tem maçãs!", show_alert=True)
         return
 
-    await query.answer(mensagem) 
-    await pet(update, context) # Recarrega a tela do Pet
+    # Monta botões baseados no que o jogador possui
+    keyboard = []
+    
+    if qtd_total >= 1: keyboard.append([InlineKeyboardButton(" Alimentar com 1x", callback_data="exec_alim_1")])
+    if qtd_total >= 10: keyboard.append([InlineKeyboardButton(" Alimentar com 10x", callback_data="exec_alim_10")])
+    if qtd_total >= 20: keyboard.append([InlineKeyboardButton(" Alimentar com 20x", callback_data="exec_alim_20")])
+    if qtd_total > 1: keyboard.append([InlineKeyboardButton(f" Tudo ({qtd_total}x)", callback_data=f"exec_alim_{qtd_total}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅ Voltar ao Pet", callback_data="pet")])
+    
+    await query.edit_message_caption(
+        caption=f"Menu de Alimentação\n\nVocê possui {qtd_total} maçãs. Escolha quanto dar ao seu pet:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+    
+    
+async def executar_alimentar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe a escolha de quantidade e executa no banco"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    # Extrai o número do callback (exec_alim_X)
+    qtd = int(query.data.split("_")[2])
+    
+    sucesso, mensagem = database.dar_xp_pet(user_id, "Maçã", 10, qtd)
+    
+    # Resultado visual
+    await query.answer(f"{'Sucesso!' if sucesso else 'Erro!'}")
+    
+    # Mostra mensagem e volta pro menu pet
+    await pet(update, context)
+    
     
     
 async def equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2041,6 +2065,7 @@ LISTA_ITENS_MESTRE = [
     # EQUIPAMENTOS (Armas e Armaduras)
     ('Espada de Madeira', 'equipamento', 'arma', 5, 'Uma espada simples (+5 Atq).', 100),
     ('Armadura de Couro', 'equipamento', 'armadura', 3, 'Proteção básica (+3 Def).', 120),
+    ('Facão', 'equipamento', 'arma', 10, 'Uma lâmina de corte pesado (+10 Atq).', 200),
     
     # MATERIAIS E DROPS (Para venda ou quests futuras)
     ('Osso Antigo', 'material', 'venda', 0, 'Um osso velho que pode ser vendido.', 15),

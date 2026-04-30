@@ -1,27 +1,33 @@
-# Aqui é o motor do bot
 import database
 import admin
+import logging
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import TOKEN
-from handlers import start, cadastro
-from handlers import perfil, menu
-from handlers import login, router
-from handlers import status as handler_status
-from handlers import viagem, caca, mochila
+from handlers import start, cadastro, perfil, menu, login, router, status as handler_status, viagem, caca, mochila
 import warnings
+
+# Configuração de Logging para ver erros no console da Shard Cloud
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
-print('Bot Online!')
-print("Bot iniciado - Versão 1.0.2")
+print("--- SISTEMA INICIADO ---")
 
 def main():
+    # Inicialização do Banco
     database.criar_tabela()
     database.popular_dados_iniciais()
     database.atualizar_estrutura_banco()
     admin.debug_tabela()
+    
+    # Construção do App
     app = Application.builder().token(TOKEN).build()
 
-    # Handlers (Ouvintes)
+    # Handlers
     app.add_handler(CommandHandler("start", start.inicio))
     app.add_handler(CallbackQueryHandler(login.iniciar_login, pattern='^login$'))
     app.add_handler(CallbackQueryHandler(cadastro.escolher_genero, pattern='^registrar$'))
@@ -32,7 +38,7 @@ def main():
     app.add_handler(CallbackQueryHandler(menu.menu_principal, pattern="^menu_principal$"))
     app.add_handler(CallbackQueryHandler(start.pet, pattern="pet"))
     app.add_handler(CallbackQueryHandler(start.voltar_menu, pattern="menu"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,router.processar_texto))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router.processar_texto))
     app.add_handler(CommandHandler("sair", login.sair_conta))
     app.add_handler(CallbackQueryHandler(start.login_diario, pattern="^login_diario$"))
     app.add_handler(CallbackQueryHandler(handler_status.status, pattern="status"))
@@ -50,12 +56,11 @@ def main():
     app.add_handler(CallbackQueryHandler(start.equipar_pet, pattern="^equipar_pet$"))
     app.add_handler(CallbackQueryHandler(start.alimentar_pet_menu, pattern="^alimentar_menu$"))
     app.add_handler(CallbackQueryHandler(start.executar_alimentar, pattern="^exec_alim_"))
-    
-    
-    # ... outros handlers
+
     print("Bot aguardando mensagens...")
-    app.run_polling()
+    
+    # drop_pending_updates=True limpa comandos antigos que foram enviados enquanto o bot estava off
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
-    
