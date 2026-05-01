@@ -1,73 +1,68 @@
-# --- ARQUIVO: .\handlers\router.py ---
 import handlers.cadastro as cadastro
 import handlers.login as login
 import database
 import admin
-from modelos.monstros import buscar_modelo_pet
-from modelos.itens import buscar_dados_item
+from modelos.monstros import buscar_modelo_pet 
 
+# COLOQUE SEU ID REAL AQUI
 ADMIN_ID = 5386405631  
-
 
 async def processar_texto(update, context):
     user_id = update.effective_user.id
     texto = update.message.text
     comando_limpo = texto.lower()
 
-    # --- COMANDO ADMIN: /dar [NICK] [QTD] [NOME] ---
-    if (comando_limpo.startswith("dar ") or comando_limpo.startswith("/dar ")) and user_id == ADMIN_ID:
-        partes = texto.split()
+    # --- COMANDO ADMIN: /darpet [NICK] [NOME DO PET] ---
+    if comando_limpo.startswith(("/darpet ", "darpet ")) and user_id == ADMIN_ID:
+        print(f"DEBUG ADMIN: Tentando dar pet. Comando: {texto}")
         
-        if len(partes) < 4:
-            await update.message.reply_text("⚠️ Use: `/dar [NICK] [QTD] [NOME]`\nEx: `/dar Recruta 10 Maçã`", parse_mode="Markdown")
+        partes = texto.split()
+        if len(partes) < 3:
+            await update.message.reply_text("⚠️ Use: `/darpet [NICK] [NOME]`\nEx: `/darpet Recruta Lobo filhote`", parse_mode="Markdown")
             return
 
         nick_alvo = partes[1]
-        try:
-            quantidade = int(partes[2])
-        except ValueError:
-            await update.message.reply_text("❌ A quantidade deve ser um número.")
-            return
-            
-        nome_item = " ".join(partes[3:]) # Pega o resto como nome do item
-
-        # 1. Verifica se o jogador existe
-        jogador = database.buscar_personagem_por_nick(nick_alvo)
-        if not jogador:
-            await update.message.reply_text(f"❌ Jogador '{nick_alvo}' não encontrado.")
+        nome_pet = " ".join(partes[2:]) # Une o resto (ex: 'Lobo', 'filhote' -> 'Lobo filhote')
+        
+        # 1. Busca o modelo do pet nos monstros.py
+        pet_modelo = buscar_modelo_pet(nome_pet)
+        if not pet_modelo:
+            print(f"DEBUG ADMIN: Pet '{nome_pet}' não encontrado nos modelos.")
+            await update.message.reply_text(f"❌ O pet '{nome_pet}' não existe nos arquivos de modelos.")
             return
 
-        # 2. Verifica se o item existe na lista mestre
-        dados_item = buscar_dados_item(nome_item)
-        if not dados_item:
-            await update.message.reply_text(f"❌ Item '{nome_item}' não existe no jogo.")
+        # 2. Busca o jogador pelo Nick
+        jogador_alvo = database.buscar_personagem_por_nick(nick_alvo)
+        if not jogador_alvo:
+            print(f"DEBUG ADMIN: Jogador '{nick_alvo}' não encontrado no banco.")
+            await update.message.reply_text(f"❌ O jogador '{nick_alvo}' não foi encontrado.")
             return
 
-        # 3. Adiciona ao inventário no banco
-        sucesso, msg = database.adicionar_item_inventario(
-            jogador['user_id'], 
-            dados_item['nome'], 
-            dados_item['tipo'], 
-            quantidade
-        )
-
-        if sucesso:
-            await update.message.reply_text(f"✅ Feito! {quantidade}x {dados_item['nome']} enviados para {nick_alvo}.")
-        else:
-            await update.message.reply_text(f"⚠️ Ocorreu um problema: {msg}")
+        # 3. Entrega o pet
+        target_id = jogador_alvo['user_id']
+        database.adicionar_novo_pet(target_id, pet_modelo)
+        
+        print(f"DEBUG ADMIN: Pet {nome_pet} entregue para {nick_alvo} com sucesso!")
+        await update.message.reply_text(f"✅ Sucesso! *{nome_pet}* foi adicionado à coleção de *{nick_alvo}*!", parse_mode="Markdown")
         return
 
-    # --- COMANDO ADMIN: /darpet ---
-    if (comando_limpo.startswith("darpet ") or comando_limpo.startswith("/darpet ")) and user_id == ADMIN_ID:
-        # (Mantenha a lógica do darpet que fizemos antes aqui)
-        pass
+    # --- COMANDO ADMIN: /dar [NICK] [QTD] [ITEM] ---
+    if (comando_limpo.startswith("dar ") or comando_limpo.startswith("/dar ")) and user_id == ADMIN_ID:
+        # ... (Sua lógica de dar item que já funciona)
+        from modelos.itens import buscar_dados_item
+        partes = texto.split()
+        if len(partes) >= 4:
+            nick_alvo = partes[1]
+            quantidade = int(partes[2])
+            nome_item = " ".join(partes[3:])
+            jogador = database.buscar_personagem_por_nick(nick_alvo)
+            dados_item = buscar_dados_item(nome_item)
+            if jogador and dados_item:
+                database.adicionar_item_inventario(jogador['user_id'], dados_item['nome'], dados_item['tipo'], quantidade)
+                await update.message.reply_text(f"✅ {quantidade}x {nome_item} dados para {nick_alvo}.")
+        return
 
-    # --- COMANDO ADMIN: /set_level ---
-    if (comando_limpo.startswith("set_level ") or comando_limpo.startswith("/set_level ")) and user_id == ADMIN_ID:
-        # (Mantenha a sua lógica de set_level aqui)
-        pass
-
-    # --- LÓGICA DE LOGIN/CADASTRO ---
+    # --- LÓGICA DE LOGIN E CADASTRO ---
     if context.user_data.get("login_etapa"):
         await login.processar_login(update, context)
         return

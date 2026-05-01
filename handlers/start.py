@@ -202,11 +202,14 @@ async def login_diario(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
 
 async def alimentar_pet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra opções de quantidade baseada no estoque de maçãs"""
+    """Mostra opções de quantidade para o pet selecionado"""
     query = update.callback_query
     await query.answer()
     
+    # Extrai o pet_id do callback (ex: alimentar_menu_5)
+    pet_id = int(query.data.split("_")[2])
     user_id = query.from_user.id
+    
     itens = database.get_inventario(user_id)
     qtd_total = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
     
@@ -214,39 +217,38 @@ async def alimentar_pet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.answer("Você não tem maçãs!", show_alert=True)
         return
 
-    # Monta botões baseados no que o jogador possui
     keyboard = []
+    # O callback agora leva o pet_id e a quantidade: exec_alim_{pet_id}_{qtd}
+    if qtd_total >= 1: keyboard.append([InlineKeyboardButton("🍎 1x Maçã", callback_data=f"exec_alim_{pet_id}_1")])
+    if qtd_total >= 10: keyboard.append([InlineKeyboardButton("🍎 10x Maçãs", callback_data=f"exec_alim_{pet_id}_10")])
+    if qtd_total > 1: keyboard.append([InlineKeyboardButton(f"🍎 Tudo ({qtd_total}x)", callback_data=f"exec_alim_{pet_id}_{qtd_total}")])
     
-    if qtd_total >= 1: keyboard.append([InlineKeyboardButton(" Alimentar com 1x", callback_data="exec_alim_1")])
-    if qtd_total >= 10: keyboard.append([InlineKeyboardButton(" Alimentar com 10x", callback_data="exec_alim_10")])
-    if qtd_total >= 20: keyboard.append([InlineKeyboardButton(" Alimentar com 20x", callback_data="exec_alim_20")])
-    if qtd_total > 1: keyboard.append([InlineKeyboardButton(f" Tudo ({qtd_total}x)", callback_data=f"exec_alim_{qtd_total}")])
-    
-    keyboard.append([InlineKeyboardButton("⬅ Voltar ao Pet", callback_data="pet")])
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data=f"ver_pet_{pet_id}")])
     
     await query.edit_message_caption(
-        caption=f"Menu de Alimentação\n\nVocê possui {qtd_total} maçãs. Escolha quanto dar ao seu pet:",
+        caption=f"Quantas maçãs deseja dar ao seu pet?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
     
-    
 async def executar_alimentar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe a escolha de quantidade e executa no banco"""
+    """Executa a alimentação no pet específico"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
     
-    # Extrai o número do callback (exec_alim_X)
-    qtd = int(query.data.split("_")[2])
+    # Extrai dados: exec_alim_{pet_id}_{qtd}
+    partes = query.data.split("_")
+    pet_id = int(partes[2])
+    qtd = int(partes[3])
     
-    sucesso, mensagem = database.dar_xp_pet(user_id, "Maçã", 10, qtd)
+    sucesso, mensagem = database.dar_xp_pet(user_id, pet_id, "Maçã", 10, qtd)
     
-    # Resultado visual
-    await query.answer(f"{'Sucesso!' if sucesso else 'Erro!'}")
+    await query.answer(mensagem, show_alert=True)
     
-    # Mostra mensagem e volta pro menu pet
-    await pet(update, context)
+    # Retorna para a tela de detalhes do pet para ver o progresso
+    # Criamos um objeto query "fake" para reaproveitar a função ver_detalhes_pet
+    query.data = f"ver_pet_{pet_id}"
+    await ver_detalhes_pet(update, context)
     
     
     

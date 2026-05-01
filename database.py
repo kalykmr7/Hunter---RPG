@@ -497,23 +497,23 @@ def calcular_xp_pet(level):
     # Lvl 1: 50 | Lvl 2: 100 | Lvl 3: 150...
     return 50 + (level - 1) * 200
 
-def dar_xp_pet(user_id, item_nome, xp_por_unidade, qtd):
-    """Dá XP ao Pet e processa level ups com custo progressivo"""
+def dar_xp_pet(user_id, pet_id, item_nome, xp_por_unidade, qtd):
+    """Dá XP a um pet específico e processa level ups"""
     conn = conectar()
     cursor = conn.cursor()
 
-    # 1. Busca os dados atuais
+    # 1. Busca os dados do pet específico
     cursor.execute("""
-        SELECT pet_nome, pet_xp, pet_level, pet_vida, pet_ataque, pet_defesa, pet_agilidade 
-        FROM personagens WHERE user_id = ?
-    """, (user_id,))
-    jogador = cursor.fetchone()
+        SELECT nome, xp, level, vida, ataque, defesa, agilidade, equipado 
+        FROM pets_jogador WHERE id = ? AND user_id = ?
+    """, (pet_id, user_id))
+    pet = cursor.fetchone()
 
-    if not jogador or not jogador['pet_nome']:
+    if not pet:
         conn.close()
-        return False, "Você ainda não possui um pet."
+        return False, "Pet não encontrado."
 
-    # 2. Verifica estoque
+    # 2. Verifica estoque de comida
     cursor.execute("SELECT quantidade FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, item_nome))
     item = cursor.fetchone()
     
@@ -527,40 +527,46 @@ def dar_xp_pet(user_id, item_nome, xp_por_unidade, qtd):
     else:
         cursor.execute("DELETE FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, item_nome))
 
-    # 4. Lógica de XP Progressivo
+    # 4. Lógica de XP e Level Up (Regra: 50 + (Lvl-1) * 50)
     xp_ganho_total = xp_por_unidade * qtd
-    novo_xp = (jogador['pet_xp'] or 0) + xp_ganho_total
-    novo_lvl = jogador['pet_level'] if jogador['pet_level'] else 1
-    
-    n_vida, n_atq, n_def, n_agi = jogador['pet_vida'], jogador['pet_ataque'], jogador['pet_defesa'], jogador['pet_agilidade']
+    novo_xp = (pet['xp'] or 0) + xp_ganho_total
+    novo_lvl = pet['level']
+    n_vida, n_atq, n_def, n_agi = pet['vida'], pet['ataque'], pet['defesa'], pet['agilidade']
     
     levels_ganhos = 0
-    # O custo (threshold) agora muda a cada nível que o pet sobe
     while True:
-        xp_necessario = calcular_xp_pet(novo_lvl)
+        xp_necessario = 50 + (novo_lvl - 1) * 50
         if novo_xp >= xp_necessario:
             novo_xp -= xp_necessario
             novo_lvl += 1
             levels_ganhos += 1
-            n_vida += 1; n_atq += 1; n_def += 1; n_agi += 1
+            # Aumenta atributos (Ajuste conforme seu balanceamento)
+            n_vida += 2; n_atq += 1; n_def += 1; n_agi += 1
         else:
             break
 
+    # 5. Atualiza a tabela de pets
     cursor.execute("""
-        UPDATE personagens 
-        SET pet_xp = ?, pet_level = ?, pet_vida = ?, pet_ataque = ?, pet_defesa = ?, pet_agilidade = ?
-        WHERE user_id = ?
-    """, (novo_xp, novo_lvl, n_vida, n_atq, n_def, n_agi, user_id))
+        UPDATE pets_jogador 
+        SET xp = ?, level = ?, vida = ?, ataque = ?, defesa = ?, agilidade = ?
+        WHERE id = ?
+    """, (novo_xp, novo_lvl, n_vida, n_atq, n_def, n_agi, pet_id))
+
+    # 6. SE ESTIVER EQUIPADO: Sincroniza com a tabela personagens
+    if pet['equipado'] == 1:
+        cursor.execute("""
+            UPDATE personagens 
+            SET pet_level = ? WHERE user_id = ?
+        """, (novo_lvl, user_id))
 
     conn.commit()
     conn.close()
     
     msg = f"Seu pet ganhou {xp_ganho_total} de XP! ✨"
     if levels_ganhos > 0:
-        msg += f"\n\n🌟 EVOLUÇÃO! Subiu {levels_ganhos} nível(is)! (Agora Lvl {novo_lvl})"
+        msg += f"\n🌟 EVOLUÇÃO! Lvl {novo_lvl}!"
     
     return True, msg
-
 
 
 def curar_personagem_total(user_id):

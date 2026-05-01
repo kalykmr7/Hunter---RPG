@@ -54,10 +54,11 @@ def main():
     app.add_handler(CallbackQueryHandler(caca.voltar_turno_luta, pattern="^voltar_turno_luta$"))
     app.add_handler(CallbackQueryHandler(mochila.ver_mochila, pattern="^mochila$"))
     app.add_handler(CallbackQueryHandler(start.equipar_pet, pattern="^equipar_pet$"))
-    app.add_handler(CallbackQueryHandler(start.alimentar_pet_menu, pattern="^alimentar_menu$"))
+    app.add_handler(CallbackQueryHandler(start.alimentar_pet_menu, pattern="^alimentar_menu_"))
     app.add_handler(CallbackQueryHandler(start.executar_alimentar, pattern="^exec_alim_"))
     app.add_handler(CallbackQueryHandler(start.ver_detalhes_pet, pattern="^ver_pet_"))
     app.add_handler(CallbackQueryHandler(start.executar_equipar_pet, pattern="^equipar_pet_"))
+    
 
     print("Bot aguardando mensagens...")
     
