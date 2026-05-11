@@ -5,7 +5,6 @@ import database
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 
-# --- ARQUIVO: .\handlers\status.py ---
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -16,8 +15,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # BUSCA O JOGADOR E APLICA O BÔNUS AQUI
     jogador_bruto = database.get_jogador(user_id)
-    jogador = database.aplicar_bonus_pet(dict(jogador_bruto)) # APLICA BÔNUS!
-    print(f"DEBUG STATUS: Vida Max após bônus: {jogador['vida_max']}")
+    jogador = database.aplicar_bonus_geral(dict(jogador_bruto)) # APLICA BÔNUS!
 
     if not jogador:
         await query.edit_message_caption(caption="❌ Erro: Personagem não encontrado.")
@@ -31,13 +29,15 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Texto formatado com os valores JÁ COM BÔNUS
     texto_status = (
-        f"📊 STATUS\n\n"
+        f"📊 Status\n\n"
         f"👤 Nick: {jogador['nick']}\n"
         f"📈 Nível: {jogador['level']}\n"
         f"🧪 XP: {jogador['xp']}/{xp_prox_lvl}\n"
         f"❤️ Vida: {jogador['vida_max']} \n" 
         f"⚔️ Ataque: {jogador['ataque']}\n"
         f"🛡️ Defesa: {jogador['defesa']}\n"
+        f"🍀 Sorte: {jogador['sorte']}\n"
+        f"🎯 Crítico: {jogador['critico']}\n"
         f"💰 Gold: {jogador['gold']}\n"
         f"💎 Mithril: {jogador['mithril']}\n"
     )

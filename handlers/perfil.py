@@ -16,7 +16,7 @@ async def ver_perfil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     emoji = "♂️" if dados["genero"] == "masculino" else "♀️"
     
     mensagem = (
-        f"📜 PERFIL\n\n"
+        f"📜 Perfil\n\n"
         f"👤 Nick: {dados['nick']}\n"
         f"⚥ Gênero: {dados['genero'].capitalize()} {emoji}\n"
         f"❤️ Vida: {dados['vida']}/{dados['vida_max']}\n" 

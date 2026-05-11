@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 from modelos.monstros import sortear_pet
 from handlers.menu import menu_principal
 from handlers import viagem
+from datetime import datetime
 
 async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Log de diagnóstico
@@ -104,7 +105,7 @@ async def chocar_ovo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto_sucesso = (
         f"🎉 O OVO CHOCOU!\n\n"
         f"🐾 Você obteve: {pet['nome']}\n"
-        f"Ele foi adicionado à sua coleção! Você pode gerenciar seus pets no menu de Pet."
+        f"Ele foi adicionado à sua coleção! Você pode gerenciar seus pets no menu Pet."
     )
 
     keyboard = [[InlineKeyboardButton("🏰 Menu Principal", callback_data="menu_principal")]]
@@ -120,33 +121,28 @@ async def chocar_ovo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     
 async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menu principal de Pets com botão para Incubadora."""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    
     pets = database.get_pets_jogador(user_id)
     
-    if not pets:
-        await query.edit_message_caption("❌ Você ainda não tem pets.")
-        return
-
-    texto = "🐾 *SUA COLEÇÃO DE PETS*\n\nEscolha um pet para ver detalhes ou equipar:\n"
+    texto = "🐾 Galeria de Pet\nGerencie seus companheiros ou choque novos ovos!\n"
     keyboard = []
     
-    for p in pets:
-        status = "✅" if p['equipado'] else "💤"
-        keyboard.append([InlineKeyboardButton(
-            f"{status} {p['nome']} (Lvl {p['level']})", 
-            callback_data=f"ver_pet_{p['id']}"
-        )])
+    # BOTÃO DA INCUBADORA (Sempre visível)
+    keyboard.append([InlineKeyboardButton("🥚 Incubadora", callback_data="abrir_incubadora")])
+    
+    if pets:
+        texto += "\nSua Coleção:\n"
+        for p in pets:
+            status = "✅" if p['equipado'] else "💤"
+            keyboard.append([InlineKeyboardButton(f"{status} {p['nome']} (Lvl {p['level']})", callback_data=f"ver_pet_{p['id']}")])
     
     keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     
-    await query.edit_message_caption(
-        caption=texto, 
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+
     
 async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -175,31 +171,60 @@ async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def login_diario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
+    nick = context.user_data.get("personagem_logado")
 
-    # Recupera o personagem logado na sessão
-    nick = context.user_data.get("login_nick")
+    # 1. Lógica do Login Diário (Bônus de Ouro)
+    resgate_ok, msg_login = database.reivindicar_login_diario(nick) if nick else (False, "Faça login.")
+
+    # 2. Busca Missões Diárias
+    missoes = database.get_ou_criar_missoes(user_id)
     
-    if not nick:
-        # Se falhar, tentamos a outra chave só por segurança
-        nick = context.user_data.get("personagem_logado")
-
-    if not nick:
-        await query.edit_message_caption("❌ Você precisa estar logado para resgatar o bônus.")
-        return
-
-    # Chama a lógica do banco
-    sucesso, mensagem = database.reivindicar_login_diario(nick)
-
-    # Cria o botão de voltar
-    keyboard = [[InlineKeyboardButton("⬅ Voltar ao Menu", callback_data="menu_principal")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if sucesso:
-        await query.edit_message_caption(f"🎁 LOGIN DIÁRIO\n\n{mensagem}", reply_markup=reply_markup)
-    else:
-        # Se já resgatou, exibe a mensagem de aviso
-        await query.edit_message_caption(f"⏳ AVISO\n\n{mensagem}", reply_markup=reply_markup)
+    texto = f"🎁 Bônus diário\n{msg_login}\n\n"
+    texto += "📜 Missões de hoje\n"
+    
+    keyboard = []
+    
+    for m in missoes:
+        status = "✅" if m['reivindicada'] else "🎯"
+        # MAPEAMENTO DE NOMES
+        nomes = {
+            'caca': f"Caçar {m['objetivo']} monstros",
+            'gold': f"Ganhar {m['objetivo']} gold caçando",
+            'pocao': f"Usar {m['objetivo']} poções em luta",
+            'forja': f"Realizar {m['objetivo']} melhorias no Ateliê",
+            'venda': f"Vender {m['objetivo']} itens no Ateliê",
+            'alimentar': f"Dar {m['objetivo']} frutas ao Pet"
+        }
+        desc = nomes.get(m['tipo'], "Missão desconhecida")
         
+        texto += f"{status} {desc} ({m['progresso']}/{m['objetivo']})\n"
+        
+        # Se completou mas não reivindicou, mostra o botão
+        if m['progresso'] >= m['objetivo'] and not m['reivindicada']:
+            keyboard.append([InlineKeyboardButton(f"🎁 Resgatar {m['recompensa_gold']} Gold", callback_data=f"resgatar_missao_{m['tipo']}")])
+
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu_principal")])
+    
+    await query.edit_message_caption(
+        caption=texto, 
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def reivindicar_missao_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback para o botão de resgate da missão"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    tipo = query.data.replace("resgatar_missao_", "")
+    
+    sucesso, msg = database.reivindicar_missao_db(user_id, tipo)
+    await query.answer(msg, show_alert=True)
+    
+    # Atualiza a tela de login diário para mostrar o status novo
+    await login_diario(update, context)
+    
+
 
 async def alimentar_pet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Mostra opções de quantidade para o pet selecionado"""
@@ -211,22 +236,22 @@ async def alimentar_pet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user_id = query.from_user.id
     
     itens = database.get_inventario(user_id)
-    qtd_total = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
+    qtd_total = sum(item['quantidade'] for item in itens if item['item_nome'] == "Fruta arco-íris")
     
     if qtd_total == 0:
-        await query.answer("Você não tem maçãs!", show_alert=True)
+        await query.answer("Você não tem nenhuma fruta!", show_alert=True)
         return
 
     keyboard = []
     # O callback agora leva o pet_id e a quantidade: exec_alim_{pet_id}_{qtd}
-    if qtd_total >= 1: keyboard.append([InlineKeyboardButton("🍎 1x Maçã", callback_data=f"exec_alim_{pet_id}_1")])
-    if qtd_total >= 10: keyboard.append([InlineKeyboardButton("🍎 10x Maçãs", callback_data=f"exec_alim_{pet_id}_10")])
+    if qtd_total >= 1: keyboard.append([InlineKeyboardButton("🍎 1x Fruta arco-íris", callback_data=f"exec_alim_{pet_id}_1")])
+    if qtd_total >= 10: keyboard.append([InlineKeyboardButton("🍎 10x frutas arco-íris", callback_data=f"exec_alim_{pet_id}_10")])
     if qtd_total > 1: keyboard.append([InlineKeyboardButton(f"🍎 Tudo ({qtd_total}x)", callback_data=f"exec_alim_{pet_id}_{qtd_total}")])
     
     keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data=f"ver_pet_{pet_id}")])
     
     await query.edit_message_caption(
-        caption=f"Quantas maçãs deseja dar ao seu pet?",
+        caption=f"Quantas frutas arco-íris deseja dar ao seu pet?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
@@ -241,9 +266,10 @@ async def executar_alimentar(update: Update, context: ContextTypes.DEFAULT_TYPE)
     pet_id = int(partes[2])
     qtd = int(partes[3])
     
-    sucesso, mensagem = database.dar_xp_pet(user_id, pet_id, "Maçã", 10, qtd)
+    sucesso, mensagem = database.dar_xp_pet(user_id, pet_id, "Fruta arco-íris", 10, qtd)
     
     await query.answer(mensagem, show_alert=True)
+    database.atualizar_progresso_missao(user_id, 'alimentar', qtd)
     
     # Retorna para a tela de detalhes do pet para ver o progresso
     # Criamos um objeto query "fake" para reaproveitar a função ver_detalhes_pet
@@ -272,50 +298,56 @@ async def equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     
 async def ver_detalhes_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Exibe os detalhes de um pet específico da coleção"""
+    """Exibe detalhes do pet com alternância real entre Equipar/Desequipar"""
     query = update.callback_query
     await query.answer()
     
-    # Extrai o ID do pet do callback (ex: ver_pet_5 -> 5)
+    # Extração do ID
     pet_id = int(query.data.split("_")[2])
-    pet = database.get_pet_por_id(pet_id)
+    pet_db = database.get_pet_por_id(pet_id)
     user_id = query.from_user.id
     
-    if not pet:
+    if not pet_db:
         await query.edit_message_caption("❌ Pet não encontrado.")
         return
 
-    # Verifica se tem maçãs para mostrar o botão alimentar
-    itens = database.get_inventario(user_id)
-    qtd_maca = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
+    # Busca descrição do bônus
+    from modelos.monstros import buscar_modelo_pet
+    modelo = buscar_modelo_pet(pet_db['nome'])
+    desc_bonus = modelo.get('bonus', "Bônus não configurado.")
 
-    status_eq = "✅ Equipado" if pet['equipado'] else [ ]
+    # SEGURANÇA: Convertemos para int para garantir a comparação (1 ou 0)
+    esta_equipado = int(pet_db['equipado']) == 1
+    status_texto = "✅ EQUIPADO" if esta_equipado else "💤"
     
     texto = (
-        f"🐾 Detalhes do pet:\n\n"
-        f"Nome: {pet['nome']}\n"
-        f"Nível: {pet['level']}\n"
-        f"Status: {status_eq}\n\n"
-        f"❤️ Vida: {pet['vida']}\n"
-        f"⚔️ Ataque: {pet['ataque']}\n"
-        f"🛡️ Defesa: {pet['defesa']}\n"
-        f"⚡ Agilidade: {pet['agilidade']}\n\n"
-        f"🍎 Suas maçãs: {qtd_maca}"
+        f"🐾 Detalhes\n\n"
+        f"Nome: {pet_db['nome']}\n"
+        f"Nível: {pet_db['level']}\n"
+        f"Status: {status_texto}\n\n"
+        f"✨ Habilidade: \n{desc_bonus}\n\n"
+        f"📊 Status: \n❤️ {pet_db['vida']} | ⚔️ {pet_db['ataque']} | 🛡️ {pet_db['defesa']}"
     )
 
     keyboard = []
     
-    # Se não estiver equipado, mostra o botão para equipar
-    if not pet['equipado']:
+    # LÓGICA DO BOTÃO DINÂMICO
+    if esta_equipado:
+        # Se está equipado, mostra apenas o botão de DESEQUIPAR
+        keyboard.append([InlineKeyboardButton("❌ Desequipar Pet", callback_data=f"desequipar_pet_{pet_id}")])
+    else:
+        # Se NÃO está equipado, mostra o botão de EQUIPAR
         keyboard.append([InlineKeyboardButton("⚔️ Equipar este Pet", callback_data=f"equipar_pet_{pet_id}")])
-    
-    # Botão de alimentar (usamos o ID do pet agora para o XP ir para o lugar certo!)
+
+    # Botão de alimentação (sempre visível se houver maçãs)
+    itens = database.get_inventario(user_id)
+    qtd_maca = sum(item['quantidade'] for item in itens if item['item_nome'] == "Fruta arco-íris")
     if qtd_maca > 0:
-        keyboard.append([InlineKeyboardButton("🍎 Alimentar", callback_data=f"alimentar_menu_{pet_id}")])
+        keyboard.append([InlineKeyboardButton(f"🍎 Alimentar ({qtd_maca})", callback_data=f"alimentar_menu_{pet_id}")])
         
-    keyboard.append([InlineKeyboardButton("⬅ Voltar para Lista", callback_data="pet")])
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="pet")])
     
-    caminho_foto = os.path.join('imagens', pet['imagem'])
+    caminho_foto = os.path.join('imagens', pet_db['imagem'])
     
     try:
         with open(caminho_foto, 'rb') as foto:
@@ -325,6 +357,7 @@ async def ver_detalhes_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except FileNotFoundError:
         await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
 
 async def executar_equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Processa a troca de pet ativo"""
@@ -340,3 +373,135 @@ async def executar_equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYP
     # Volta para os detalhes do pet atualizado
     await ver_detalhes_pet(update, context)
     
+
+async def executar_desequipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Executa a remoção do pet ativo"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    pet_id = int(query.data.split("_")[2]) # Pegamos o ID apenas para recarregar a tela depois
+    
+    # Chama a função do banco
+    database.desequipar_pet_completo_db(user_id)
+    
+    await query.answer("Desequipado", show_alert=True)
+    
+    # Recarrega a tela de detalhes para mostrar que agora o status mudou
+    await ver_detalhes_pet(update, context)
+    
+    
+async def abrir_incubadora(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    MAX_SLOTS = 3 
+    processos = database.get_incubacoes_ativas(user_id)
+    ovos_estoque = database.get_ovos_jogador(user_id)
+    
+    texto = f"🌡️ Central de Incubação ({len(processos)}/{MAX_SLOTS})\n\n"
+    keyboard = []
+
+    # OVOS CHOCANDO
+    if processos:
+        for p in processos:
+            tempo_final = datetime.strptime(p['tempo_final'], "%Y-%m-%d %H:%M:%S")
+            agora = datetime.now()
+            
+            if agora >= tempo_final:
+                texto += f"✅ {p['ovo_nome']} pronto!\n"
+                keyboard.append([InlineKeyboardButton(f"🐣 Reivindicar {p['ovo_nome']}", callback_data=f"finalizar_chocar_{p['id']}")])
+            else:
+                restante = tempo_final - agora
+                texto += f"⏳ {p['ovo_nome']}: `{restante.seconds // 3600:02}h` restantes\n"
+        keyboard.append([InlineKeyboardButton("🔄 Atualizar", callback_data="abrir_incubadora")])
+    else:
+        texto += "❄️ Nenhuma incubação ativa.\n"
+
+    # ESTOQUE
+    texto += "\n📦 Seus Ovos:\n"
+    if not ovos_estoque:
+        texto += "_Vazio._"
+    else:
+        for o in ovos_estoque:
+            # Exibe o nome completo: Ovo [Região 1]
+            texto += f"• {o['item_nome']} (x{o['quantidade']})\n"
+            if len(processos) < MAX_SLOTS:
+                keyboard.append([InlineKeyboardButton(f"🔥 Chocar {o['item_nome']}", callback_data=f"chocar_selecionado_{o['id']}")])
+
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="pet")])
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+
+
+async def chocar_ovo_selecionado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inicia o processo de chocar com base na raridade."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    inv_id = int(query.data.split("_")[2])
+    
+    conn = database.conectar()
+    ovo = conn.execute("SELECT item_nome FROM inventario WHERE id = ? AND user_id = ?", (inv_id, user_id)).fetchone()
+    if not ovo:
+        conn.close()
+        return
+
+    nome_ovo = ovo['item_nome']
+    
+    # DEFINIÇÃO DE TEMPOS (REGRAS DO MESTRE)
+    tempos = {
+        "Ovo Comum": 6,
+        "Ovo Incomum": 12,
+        "Ovo Raro": 18,
+        "Ovo Lendário": 24
+    }
+    horas_necessarias = tempos.get(nome_ovo, 6)
+
+    # 1. Consome o ovo da mochila
+    conn.execute("UPDATE inventario SET quantidade = quantidade - 1 WHERE id = ?", (inv_id,))
+    conn.execute("DELETE FROM inventario WHERE id = ? AND quantidade <= 0", (inv_id,))
+    conn.commit()
+    conn.close()
+
+    # 2. Inicia o timer no banco
+    database.iniciar_incubacao_db(user_id, nome_ovo, horas_necessarias)
+    
+    await query.answer(f"O {nome_ovo} foi colocado na incubadora! 🌡️", show_alert=True)
+    await abrir_incubadora(update, context)
+    
+
+async def finalizar_chocar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    incubacao_id = int(query.data.split("_")[2])
+    
+    conn = database.conectar()
+    res = conn.execute("SELECT ovo_nome FROM incubacao_ativa WHERE id = ?", (incubacao_id,)).fetchone()
+    conn.close()
+    
+    if not res: return
+
+    nome_do_ovo = res['ovo_nome']
+    mapa_id = 0
+    # Extrai o número de: Ovo [Região 3]
+    if "Região " in nome_do_ovo:
+        try:
+            mapa_id = int(nome_do_ovo.split("Região ")[1].replace("]", ""))
+        except: mapa_id = 0
+
+    from modelos.monstros import sortear_pet
+    pet_ganho = sortear_pet(mapa_id)
+    database.adicionar_novo_pet(user_id, pet_ganho)
+    database.remover_incubacao_por_id(incubacao_id)
+    
+    await query.answer(f"Nasceu um {pet_ganho['nome']}!")
+    
+    texto = f"🎉 O OVO CHOCOU!\n\n🐾 Você obteve: {pet_ganho['nome']}\n✨ Bônus: _{pet_ganho['bonus']}_"
+    keyboard = [[InlineKeyboardButton(" Voltar", callback_data="abrir_incubadora")]]
+    
+    caminho_foto = os.path.join('imagens', pet_ganho['imagem'])
+    try:
+        with open(caminho_foto, 'rb') as foto:
+            await query.edit_message_media(media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"), reply_markup=InlineKeyboardMarkup(keyboard))
+    except:
+        await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")

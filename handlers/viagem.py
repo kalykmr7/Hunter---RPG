@@ -79,67 +79,63 @@ async def manter_local(update, context: ContextTypes.DEFAULT_TYPE):
         show_alert=False
     )
     
+# --- ARQUIVO: .\handlers\viagem.py ---
+
 async def exibir_mapa(update, context, mapa_id):
-    """Exibe a interface do mapa atual com sua descrição única e botões de ação"""
+    """Exibe a interface do mapa. Mapa 0 = Vila (Serviços), Mapa > 0 = Caça."""
     user_id = update.effective_user.id 
     query = getattr(update, "callback_query", None)
     
-    # Cura e Atualiza Localização
+    # Garantimos que o ID seja um número inteiro para a comparação funcionar
+    mapa_id = int(mapa_id)
+    
+    # 1. Atualizações de Estado
     database.curar_personagem_total(user_id)
     database.atualizar_mapa_personagem(user_id, mapa_id)
     
     jogador = database.get_jogador(user_id)
     if not jogador: return
 
-    # Busca as informações do mapa na nossa lista de modelos
+    # 2. Busca informações do modelo do mapa
     mapa_info = next((m for m in lista_mapas if m["id"] == mapa_id), None)
     if not mapa_info: return
 
-    nome_mapa = mapa_info.get('nome', 'Área Desconhecida')
-    # Pegamos a descrição única que acabamos de criar
-    descricao_mapa = mapa_info.get('descricao', )
-    
-    imagem_nome = mapa_info.get('imagem', 'capa.png')
-    caminho_img = os.path.join("imagens", imagem_nome)
-    
-    if jogador['pet_equipado'] == 1 and jogador['pet_nome']:
-        status_pet = f"{jogador['pet_nome']}"
-    else:
-        status_pet = "❌ Nenhum"
-
+    caminho_img = os.path.join("imagens", mapa_info.get('imagem', 'capa.png'))
     keyboard = []
+
+    # --- LÓGICA DE RAMIFICAÇÃO DA UI ---
     
-    # Montagem do Texto e Botões baseada no Tipo de Mapa
     if mapa_id == 0:
-        # Layout para a Vila/Lobby
+        # INTERFACE DA VILA (Apenas aqui tem Ateliê e Login Diário)
         texto = (
-            f"🏰 {nome_mapa}\n"
-            f"_{descricao_mapa}_\n\n"
+            f"🏰 *{mapa_info['nome']}*\n"
+            f"_{mapa_info['descricao']}_\n\n"
             f"👤 Caçador: {jogador['nick']}\n"
             f"💰 Gold: {jogador['gold']}\n"
-            f"🐾 Pet equipado: {status_pet}"
+            f"🐾 Pet: {jogador['pet_nome'] if jogador['pet_equipado'] else 'Nenhum'}"
         )
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
+        keyboard.append([InlineKeyboardButton("🛠️ Ateliê", callback_data="atelie_menu")])
         keyboard.append([InlineKeyboardButton("🎁 Login Diário", callback_data="login_diario")])
+    
     else:
-        # Layout para Áreas de Caça
+        # INTERFACE DE CAÇA (Mapas 1 a 8)
         texto = (
-            f"📍 *{nome_mapa}*\n"
-            f"_{descricao_mapa}_\n\n"
-            f"O que deseja fazer agora?"
+            f"📍 {mapa_info['nome']}\n"
+            f"_{mapa_info['descricao']}_\n\n"
+            "O que deseja fazer nesta área?"
         )
         keyboard.append([InlineKeyboardButton("⚔️ Caçar", callback_data=f"procurar_{mapa_id}")])
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
-    
-    # Botões fixos de utilidade
+
+    # Botões utilitários (Aparecem em todos os mapas)
     botoes_utilitarios = [InlineKeyboardButton("📊 Status", callback_data="status")]
-    if jogador['pet_nome']:
+    if database.jogador_possui_pets(user_id):
         botoes_utilitarios.append(InlineKeyboardButton("🐾 Pet", callback_data="pet"))
-    
     keyboard.append(botoes_utilitarios)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     try:
         if query:
             await query.answer()
@@ -152,12 +148,10 @@ async def exibir_mapa(update, context, mapa_id):
             with open(caminho_img, "rb") as foto:
                 await update.message.reply_photo(photo=foto, caption=texto, reply_markup=reply_markup, parse_mode="Markdown")
     except FileNotFoundError:
-        aviso = f"{texto}\n\n⚠️ (Imagem {imagem_nome} não encontrada)"
-        if query:
-            await query.edit_message_caption(caption=aviso, reply_markup=reply_markup, parse_mode="Markdown")
-        else:
-            await update.message.reply_text(text=aviso, reply_markup=reply_markup, parse_mode="Markdown")
-            
+        # Fallback caso a imagem falhe
+        msg = f"{texto}\n\n⚠️ (Imagem não encontrada)"
+        if query: await query.edit_message_caption(caption=msg, reply_markup=reply_markup, parse_mode="Markdown")
+        else: await update.message.reply_text(text=msg, reply_markup=reply_markup, parse_mode="Markdown")            
             
         
 async def entrar_no_mapa(update, context: ContextTypes.DEFAULT_TYPE):

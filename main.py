@@ -3,7 +3,7 @@ import admin
 import logging
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import TOKEN
-from handlers import start, cadastro, perfil, menu, login, router, status as handler_status, viagem, caca, mochila
+from handlers import start, cadastro, perfil, menu, login, router, status as handler_status, viagem, caca, mochila, atelie
 import warnings
 
 # Configuração de Logging para ver erros no console da Shard Cloud
@@ -15,14 +15,14 @@ logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-print("--- SISTEMA INICIADO ---")
-
 def main():
-    # Inicialização do Banco
-    database.criar_tabela()
-    database.popular_dados_iniciais()
-    database.atualizar_estrutura_banco()
-    admin.debug_tabela()
+    # Inicialização do Banco em ordem logica
+    database.criar_tabela()                     #Cria o que nao existe
+    database.criar_tabela_incubadora()          #Cria tabela para incubadora
+    database.criar_tabela_missoes()             #Cria a tabela de missoes diarias
+    database.atualizar_estrutura_banco()        #Adiciona colunas novas em bancos antigos
+    database.popular_dados_iniciais()           #Insere dados dos modelos
+    admin.debug_tabela()                        #debug
     
     # Construção do App
     app = Application.builder().token(TOKEN).build()
@@ -38,7 +38,7 @@ def main():
     app.add_handler(CallbackQueryHandler(menu.menu_principal, pattern="^menu_principal$"))
     app.add_handler(CallbackQueryHandler(start.pet, pattern="pet"))
     app.add_handler(CallbackQueryHandler(start.voltar_menu, pattern="menu"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router.processar_texto))
+    app.add_handler(MessageHandler(filters.TEXT, router.processar_texto))
     app.add_handler(CommandHandler("sair", login.sair_conta))
     app.add_handler(CallbackQueryHandler(start.login_diario, pattern="^login_diario$"))
     app.add_handler(CallbackQueryHandler(handler_status.status, pattern="status"))
@@ -58,9 +58,25 @@ def main():
     app.add_handler(CallbackQueryHandler(start.executar_alimentar, pattern="^exec_alim_"))
     app.add_handler(CallbackQueryHandler(start.ver_detalhes_pet, pattern="^ver_pet_"))
     app.add_handler(CallbackQueryHandler(start.executar_equipar_pet, pattern="^equipar_pet_"))
+    app.add_handler(CallbackQueryHandler(mochila.detalhes_item, pattern="^item_ver_"))
+    app.add_handler(CallbackQueryHandler(mochila.executar_acao_item, pattern="^item_acao_"))
+    app.add_handler(CallbackQueryHandler(start.executar_desequipar_pet, pattern="^desequipar_pet_"))
+    app.add_handler(CallbackQueryHandler(atelie.menu_atelie, pattern="^atelie_menu$"))
+    app.add_handler(CallbackQueryHandler(atelie.listar_venda, pattern="^atelie_vender_lista_"))
+    app.add_handler(CallbackQueryHandler(atelie.executar_venda, pattern="^confirmar_venda_"))
+    app.add_handler(CallbackQueryHandler(atelie.menu_forja, pattern="^atelie_forja_menu$"))
+    app.add_handler(CallbackQueryHandler(atelie.executar_forja, pattern="^executar_forja_"))
+    app.add_handler(CallbackQueryHandler(atelie.detalhes_forja_item, pattern="^forja_ver_"))
+    app.add_handler(CallbackQueryHandler(start.reivindicar_missao_callback, pattern="^resgatar_missao_"))
+    app.add_handler(CallbackQueryHandler(start.abrir_incubadora, pattern="^abrir_incubadora$"))
+    app.add_handler(CallbackQueryHandler(start.chocar_ovo_selecionado, pattern="^chocar_selecionado_"))
+    app.add_handler(CallbackQueryHandler(start.finalizar_chocar_callback, pattern="^finalizar_chocar_"))
+    app.add_handler(CallbackQueryHandler(atelie.menu_alquimia, pattern="^alquimia_menu$"))
+    app.add_handler(CallbackQueryHandler(atelie.executar_alquimia, pattern="^exec_alquimia_"))
+    app.add_handler(CallbackQueryHandler(atelie.listar_venda, pattern="^atelie_vender_lista_"))
+    app.add_handler(CallbackQueryHandler(atelie.vender_detalhes_item, pattern="^vender_ver_"))
+    app.add_handler(CallbackQueryHandler(atelie.executar_venda, pattern="^vender_exec_"))
     
-
-    print("Bot aguardando mensagens...")
     
     # drop_pending_updates=True limpa comandos antigos que foram enviados enquanto o bot estava off
     app.run_polling(drop_pending_updates=True)

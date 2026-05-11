@@ -46,20 +46,61 @@ async def processar_texto(update, context):
         await update.message.reply_text(f"✅ Sucesso! *{nome_pet}* foi adicionado à coleção de *{nick_alvo}*!", parse_mode="Markdown")
         return
 
-    # --- COMANDO ADMIN: /dar [NICK] [QTD] [ITEM] ---
+    # --- COMANDO ADMIN: /dar [NICK] [QTD] [RECURSO/ITEM] ---
     if (comando_limpo.startswith("dar ") or comando_limpo.startswith("/dar ")) and user_id == ADMIN_ID:
-        # ... (Sua lógica de dar item que já funciona)
-        from modelos.itens import buscar_dados_item
         partes = texto.split()
-        if len(partes) >= 4:
-            nick_alvo = partes[1]
+        if len(partes) < 4:
+            await update.message.reply_text("⚠️ Use: `/dar [NICK] [QTD] [ITEM ou GOLD]`")
+            return
+
+        nick_alvo = partes[1]
+        try:
             quantidade = int(partes[2])
-            nome_item = " ".join(partes[3:])
-            jogador = database.buscar_personagem_por_nick(nick_alvo)
-            dados_item = buscar_dados_item(nome_item)
-            if jogador and dados_item:
-                database.adicionar_item_inventario(jogador['user_id'], dados_item['nome'], dados_item['tipo'], quantidade)
-                await update.message.reply_text(f"✅ {quantidade}x {nome_item} dados para {nick_alvo}.")
+        except ValueError:
+            await update.message.reply_text("⚠️ A quantidade deve ser um número.")
+            return
+
+        nome_alvo = " ".join(partes[3:])
+        nome_alvo_lower = nome_alvo.lower()
+
+        # 1. Se for recurso financeiro
+        if nome_alvo_lower in ['gold', 'mithril']:
+            sucesso, msg = admin.dar_recurso_admin(nick_alvo, nome_alvo_lower, quantidade)
+            await update.message.reply_text(msg)
+        
+        # 2. Se for um item físico
+        else:
+            sucesso, msg = admin.dar_item_admin(nick_alvo, nome_alvo, quantidade)
+            if sucesso:
+                await update.message.reply_text(f"✅ Sucesso: {quantidade}x {nome_alvo} para {nick_alvo}.")
+            else:
+                await update.message.reply_text(f"❌ Erro: {msg}")
+        return
+    
+    # --- COMANDO ADMIN: /set_level [NICK] [NIVEL] ---
+    if comando_limpo.startswith(("/set_level", "set_level")):
+        if user_id != ADMIN_ID:
+            await update.message.reply_text("🚫 Acesso negado.")
+            return
+
+        partes = texto.split()
+        if len(partes) < 3:
+            await update.message.reply_text("⚠️ Use: `/set_level [NICK] [NIVEL]`")
+            return
+
+        nick_alvo = partes[1]
+        try:
+            nivel_novo = int(partes[2])
+            # Chamada para a função no admin.py
+            sucesso = admin.set_level_admin(nick_alvo, nivel_novo)
+            
+            if sucesso:
+                await update.message.reply_text(f"✅ O jogador {nick_alvo} foi definido para o Nível {nivel_novo}!", parse_mode="Markdown")
+            else:
+                # Tenta buscar pelo nick exato (caso o usuário tenha digitado minúsculo)
+                await update.message.reply_text(f"❌ Jogador '{nick_alvo}' não encontrado. Verifique se o Nick está idêntico ao jogo (Maiúsculas/Minúsculas).")
+        except ValueError:
+            await update.message.reply_text("⚠️ O nível deve ser um número inteiro.")
         return
 
     # --- LÓGICA DE LOGIN E CADASTRO ---

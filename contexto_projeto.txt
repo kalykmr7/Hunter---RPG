@@ -1,15 +1,25 @@
 
 --- ARQUIVO: .\admin.py ---
 
+    
+    # Comando no bot: set_level [nick] [numero] >> para dar lvl ao personagem
+    # Comando no bot: darpet [nick] [nome do pet] >> para dar um dos pets
+    # /dar kalyk 1 ovo [Região 1] = para um ovo de um mapa especifico
+    # /dar kalyk 1 ovo = para dar um ovo de pet comum
+    # /dar Recruta 50 Fruta Arco-íris (Dará 50 fruta ao jogador Recruta).
+    # /dar Recruta 1 Poção pequena (Dará uma poção).
+    # /dar Recruta 1 Espada de Madeira (Dará a espada).
+    # /dar [nick] 5000 Gold (Dará gold)
+    # /dar [nikc] 5000 mithril dará mithril
+
 import database
+from modelos.itens import buscar_dados_item
 
 def set_level_admin(nick, novo_lvl):
-    """Força um nível específico e escala os atributos proporcionalmente para testes"""
-    # Comando no bot: set_level [nick] [numero]
+    """Força um nível e escala atributos."""
     conn = database.conectar()
     cursor = conn.cursor()
     
-    # Cálculos baseados na progressão do jogo
     nova_vida_max = 100 + (novo_lvl - 1) * 20
     novo_atq = 10 + (novo_lvl - 1) * 2
     nova_def = 5 + (novo_lvl - 1) * 1
@@ -17,9 +27,9 @@ def set_level_admin(nick, novo_lvl):
     try:
         cursor.execute("""
             UPDATE personagens 
-            SET level = ?, xp = 0, vida = ?, vida_max = ?, ataque = ?, defesa = ? 
-            WHERE nick = ?
-        """, (novo_lvl, nova_vida_max, nova_vida_max, novo_atq, nova_def, nick))
+            SET level = ?, xp = 0, vida = ?, vida_max = ?, ataque = ?, defesa = ?, critico = ?
+            WHERE nick = ? COLLATE NOCASE
+        """, (novo_lvl, nova_vida_max, nova_vida_max, novo_atq, nova_def, 1, nick))
         
         sucesso = cursor.rowcount > 0 
         conn.commit()
@@ -30,16 +40,43 @@ def set_level_admin(nick, novo_lvl):
     finally:
         conn.close()
 
+def dar_recurso_admin(nick, tipo, quantidade):
+    """Adiciona Gold ou Mithril diretamente via comando admin."""
+    conn = database.conectar()
+    cursor = conn.cursor()
+    
+    if tipo not in ['gold', 'mithril']:
+        conn.close()
+        return False, "Tipo inválido."
+
+    cursor.execute(f"UPDATE personagens SET {tipo} = {tipo} + ? WHERE nick = ? COLLATE NOCASE", (quantidade, nick))
+    
+    sucesso = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return sucesso, f"✅ {quantidade} de {tipo} entregues a {nick}."
+
+def dar_item_admin(nick, item_nome, quantidade):
+    """Lógica administrativa para entrega de itens por Nick."""
+    jogador = database.buscar_personagem_por_nick(nick)
+    if not jogador:
+        return False, "Jogador não encontrado."
+    
+    dados_item = buscar_dados_item(item_nome)
+    if not dados_item:
+        return False, "Item não existe nos modelos."
+
+    # Chama a função de inventário que já tem a trava de slots
+    sucesso, msg = database.adicionar_item_inventario(jogador['user_id'], dados_item['nome'], dados_item['tipo'], quantidade)
+    return sucesso, msg
+
 def debug_tabela():
     """Função de debug para verificar estrutura do banco"""
     conn = database.conectar()
     cursor = conn.cursor()
     cursor.execute("PRAGMA table_info(personagens)")
-    print("COLUNAS:", cursor.fetchall())
+    # print("COLUNAS:", cursor.fetchall()) # Opcional silenciar no console
     conn.close()
-    
-    
-
 
 --- ARQUIVO: .\config.py ---
 # Token e configurações gerais
@@ -47,10 +84,11 @@ def debug_tabela():
 TOKEN = '8731458415:AAH2GTcf_ACsqltnQ9Aub-WmwLuyJMpud40'
 DB_NAME = 'hunter_game.db'
 
+
 --- ARQUIVO: .\database.py ---
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import DB_NAME
 from modelos.itens import LISTA_ITENS_MESTRE
 from modelos.inimigos import LISTA_MONSTROS_MESTRE, LISTA_DROPS_MAPAS
@@ -64,7 +102,6 @@ def conectar():
     conn.row_factory = sqlite3.Row 
     return conn
 
-# --- ARQUIVO: .\database.py ---
 
 def criar_tabela():
     """Cria a estrutura inicial do banco de dados"""
@@ -88,6 +125,7 @@ def criar_tabela():
             ataque INTEGER DEFAULT 10,
             defesa INTEGER DEFAULT 10,
             sorte INTEGER DEFAULT 1,
+            critico INTEGER DEFAULT 1,
             pet_equipado INTEGER DEFAULT 0,
             pet_nome TEXT,
             pet_vida INTEGER,
@@ -103,6 +141,24 @@ def criar_tabela():
             mochila_slots INTEGER DEFAULT 10
         )
     ''')
+    
+    # Tabela de Pets dos Jogadores (Permite múltiplos pets por usuário)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pets_jogador (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            nome TEXT,
+            level INTEGER DEFAULT 1,
+            xp INTEGER DEFAULT 0,
+            vida INTEGER,
+            ataque INTEGER,
+            defesa INTEGER,
+            agilidade INTEGER,
+            imagem TEXT,
+            equipado INTEGER DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES personagens(user_id)
+        )
+    ''')
 
     # 2. Tabela de Inventário
     cursor.execute('''
@@ -116,7 +172,7 @@ def criar_tabela():
         )
     ''')
 
-    # 3. Tabela Mestre de Itens
+    # 3. Tabela Mestre de Itens Mestre
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS itens_mestre (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,7 +181,9 @@ def criar_tabela():
             subtipo TEXT,
             valor_efeito INTEGER DEFAULT 0,
             descricao TEXT,
-            preco_gold INTEGER DEFAULT 0
+            preco_gold INTEGER DEFAULT 0,
+            chance_drop INTEGER DEFAULT 0,
+            nivel_max INTEGER DEFAULT 0
         )
     ''')
 
@@ -156,7 +214,23 @@ def criar_tabela():
     ''')
     conn.commit()
     conn.close()
-    
+
+
+def criar_tabela_incubadora():
+    """Cria a tabela para monitorar ovos chocando."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS incubacao_ativa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            ovo_nome TEXT,
+            tempo_final TEXT -- Salvaremos a data/hora final como string
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
 
 
 def popular_dados_iniciais():
@@ -166,8 +240,8 @@ def popular_dados_iniciais():
 
     # 1. ITENS MESTRE
     cursor.executemany("""
-        INSERT OR REPLACE INTO itens_mestre (nome, tipo, subtipo, valor_efeito, descricao, preco_gold) 
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO itens_mestre (nome, tipo, subtipo, valor_efeito, descricao, preco_gold, chance_drop, nivel_max) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, LISTA_ITENS_MESTRE)
 
     # 2. MONSTROS MESTRE
@@ -185,32 +259,27 @@ def popular_dados_iniciais():
 
     conn.commit()
     conn.close()
-    print("✅ Banco de dados sincronizado com os arquivos de modelos!")
     
-
 def get_drop_aleatorio(mapa_id):
-    """Sorteia um item baseado nos drops disponíveis para o mapa atual"""
+    """Sorteia itens normais baseados apenas na chance do mapa/item."""
     conn = conectar()
     cursor = conn.cursor()
-    # Busca todos os possíveis drops configurados para este mapa
     cursor.execute("SELECT item_nome, chance FROM drops_mapas WHERE mapa_id = ?", (mapa_id,))
-    possibilidades = cursor.fetchall()
+    drops_regionais = cursor.fetchall()
+    cursor.execute("SELECT nome as item_nome, chance_drop as chance FROM itens_mestre WHERE chance_drop > 0")
+    drops_globais = cursor.fetchall()
     conn.close()
 
-    if not possibilidades:
-        return None
+    todas_as_chances = list(drops_regionais) + list(drops_globais)
+    if not todas_as_chances: return None
 
-    # Embaralha para não beneficiar sempre o primeiro da lista
     import random
-    lista_temp = list(possibilidades)
-    random.shuffle(lista_temp)
-
-    for item in lista_temp:
-        # Se o número sorteado for menor ou igual à chance (ex: 20%), o item cai
+    random.shuffle(todas_as_chances)
+    for item in todas_as_chances:
         if random.randint(1, 100) <= item['chance']:
             return item['item_nome']
-    
     return None
+
     
 def get_monstro_aleatorio(mapa_id):
     """Busca um monstro aleatório do mapa específico no banco de dados"""
@@ -303,57 +372,57 @@ def resetar_localizacao(user_id):
     conn.commit()
     conn.close()
 
-# --- ARQUIVO: .\database.py ---
-
 
 def atualizar_estrutura_banco():
-    """Corrige colunas faltantes e resolve problemas de compatibilidade"""
+    """Verifica e adiciona colunas faltantes em todas as tabelas de forma segura."""
     conn = conectar()
     cursor = conn.cursor()
     
-    # 1. Definindo as colunas que PRECISAM existir na tabela personagens
-    colunas_necessarias = {
+    # --- ATUALIZAÇÕES NA TABELA: personagens ---
+    colunas_personagens = {
         "vida_max": "INTEGER DEFAULT 100",
         "pet_xp": "INTEGER DEFAULT 0",
         "pet_level": "INTEGER DEFAULT 1",
         "mochila_slots": "INTEGER DEFAULT 10",
-        "pet_equipado": "INTEGER DEFAULT 0" # <--- Adicionamos aqui!
+        "pet_equipado": "INTEGER DEFAULT 0",
+        "arma_equipada": "TEXT DEFAULT 'Nenhuma'",
+        "armadura_equipada": "TEXT DEFAULT 'Nenhuma'",
+        "critico": "INTEGER DEFAULT 1",
+        "set_equipado": "TEXT DEFAULT 'Nenhuma'",
+        "mithril": "INTEGER DEFAULT 0"
     }
     
-    # Verifica quais colunas já existem
     cursor.execute("PRAGMA table_info(personagens)")
-    colunas_existentes = [info[1] for info in cursor.fetchall()]
+    existentes_p = [info[1] for info in cursor.fetchall()]
     
-    # Adiciona apenas as que faltam
-    for nome, tipo in colunas_necessarias.items():
-        if nome not in colunas_existentes:
-            try:
-                cursor.execute(f"ALTER TABLE personagens ADD COLUMN {nome} {tipo}")
-                print(f"DEBUG DB: Coluna '{nome}' criada com sucesso.")
-            except sqlite3.OperationalError as e:
-                print(f"DEBUG DB: Erro ao criar coluna {nome}: {e}")
+    for nome, tipo in colunas_personagens.items():
+        if nome not in existentes_p:
+            cursor.execute(f"ALTER TABLE personagens ADD COLUMN {nome} {tipo}")
+            print(f"✅ Coluna '{nome}' adicionada em 'personagens'.")
 
-    # --- RESET DA TABELA DE DROPS (MANTENHA A SUA LÓGICA) ---
-    cursor.execute("PRAGMA table_info(drops_monstros)")
-    colunas = [col[1] for col in cursor.fetchall()]
+    # --- ATUALIZAÇÕES NA TABELA: inventario ---
+    colunas_inventario = {
+        "equipado": "INTEGER DEFAULT 0",
+        "nivel_refino": "INTEGER DEFAULT 0"
+    }
     
-    if "monstro_nome" not in colunas and len(colunas) > 0:
-        print("⚠️ Corrigindo tabela drops_monstros...")
-        cursor.execute("DROP TABLE IF EXISTS drops_monstros")
-        cursor.execute('''
-            CREATE TABLE drops_monstros (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                monstro_nome TEXT,
-                item_nome TEXT,
-                chance INTEGER,
-                qtd_min INTEGER DEFAULT 1,
-                qtd_max INTEGER DEFAULT 1
-            )
-        ''')
-            
+    cursor.execute("PRAGMA table_info(inventario)")
+    existentes_inv = [info[1] for info in cursor.fetchall()]
+    
+    for nome, tipo in colunas_inventario.items():
+        if nome not in existentes_inv:
+            cursor.execute(f"ALTER TABLE inventario ADD COLUMN {nome} {tipo}")
+            print(f"✅ Coluna '{nome}' adicionada em 'inventario'.")
+
+    # --- ATUALIZAÇÕES NA TABELA: itens_mestre ---
+    cursor.execute("PRAGMA table_info(itens_mestre)")
+    existentes_mestre = [info[1] for info in cursor.fetchall()]
+    if "nivel_max" not in existentes_mestre:
+        cursor.execute("ALTER TABLE itens_mestre ADD COLUMN nivel_max INTEGER DEFAULT 0")
+        print("✅ Coluna 'nivel_max' adicionada em 'itens_mestre'.")
+    
     conn.commit()
     conn.close()
-    
 
     
 def subir_de_nivel(user_id):
@@ -404,75 +473,64 @@ def subir_de_nivel(user_id):
     return None
 
 
-def adicionar_item_inventario(user_id, item_nome, tipo, qtd=1):
-    """Adiciona um item. Se for consumível, não ocupa slot de mochila."""
+def curar_personagem_custom(user_id, valor_hp):
+    """Cura o personagem para um valor específico (usado para aplicar bônus de Set/Pet)"""
     conn = conectar()
     cursor = conn.cursor()
-
-    # 1. Verifica se o jogador já tem esse item (para empilhar/stack)
-    cursor.execute(
-        "SELECT quantidade FROM inventario WHERE user_id = ? AND item_nome = ?", 
-        (user_id, item_nome)
-    )
-    item_existente = cursor.fetchone()
-
-    if item_existente:
-        # Se já existe, apenas aumentamos a quantidade (independente do tipo)
-        nova_qtd = item_existente['quantidade'] + qtd
-        cursor.execute(
-            "UPDATE inventario SET quantidade = ? WHERE user_id = ? AND item_nome = ?",
-            (nova_qtd, user_id, item_nome)
-        )
-        conn.commit()
-        conn.close()
-        return True, "Item empilhado!"
-
-    # 2. SE O ITEM É NOVO:
-    # Se for CONSUMÍVEL, ele entra direto, sem checar limite de slots
-    if tipo == 'consumivel':
-        cursor.execute(
-            "INSERT INTO inventario (user_id, item_nome, tipo, quantidade) VALUES (?, ?, ?, ?)",
-            (user_id, item_nome, tipo, qtd)
-        )
-        conn.commit()
-        conn.close()
-        return True, "Consumível adicionado!"
-
-    # 3. SE NÃO FOR CONSUMÍVEL (Equipamentos, Ovos, etc): Checa limite
-    # Contamos apenas itens que NÃO são consumíveis
-    cursor.execute(
-        "SELECT COUNT(*) as total FROM inventario WHERE user_id = ? AND tipo != 'consumivel'", 
-        (user_id,)
-    )
-    total_ocupado = cursor.fetchone()['total']
-
-    cursor.execute("SELECT mochila_slots FROM personagens WHERE user_id = ?", (user_id,))
-    limite = cursor.fetchone()['mochila_slots']
-
-    if total_ocupado >= limite:
-        conn.close()
-        return False, "Mochila de equipamentos cheia!"
-
-    # Se tem espaço, adiciona o item de slot
-    cursor.execute(
-        "INSERT INTO inventario (user_id, item_nome, tipo, quantidade) VALUES (?, ?, ?, ?)",
-        (user_id, item_nome, tipo, qtd)
-    )
+    # Define a vida atual como o valor total (com bônus) passado
+    cursor.execute("UPDATE personagens SET vida = ? WHERE user_id = ?", (valor_hp, user_id))
     conn.commit()
     conn.close()
-    return True, "Equipamento adicionado!"
 
-def get_inventario(user_id):
-    """Busca todos os itens que o jogador possui na mochila"""
+
+def adicionar_item_inventario(user_id, item_nome, tipo, qtd=1):
+    """Adiciona itens. Apenas EQUIPAMENTOS ocupam slots na mochila."""
     conn = conectar()
     cursor = conn.cursor()
+
+    # 1. Se for EQUIPAMENTO, verificamos o limite de slots
+    if tipo == 'equipamento':
+        cursor.execute("SELECT mochila_slots FROM personagens WHERE user_id = ?", (user_id,))
+        limite_slots = cursor.fetchone()['mochila_slots']
+
+        # Conta quantos equipamentos o jogador já possui
+        cursor.execute("SELECT COUNT(*) as ocupados FROM inventario WHERE user_id = ? AND tipo = 'equipamento'", (user_id,))
+        slots_ocupados = cursor.fetchone()['ocupados']
+
+        if slots_ocupados + qtd > limite_slots:
+            conn.close()
+            return False, f"🎒 Mochila cheia! ({slots_ocupados}/{limite_slots})"
+
+        # Insere cada equipamento como uma linha única (para permitir encantamentos/status individuais no futuro)
+        for _ in range(qtd):
+            cursor.execute(
+                "INSERT INTO inventario (user_id, item_nome, tipo, quantidade, equipado) VALUES (?, ?, ?, 1, 0)",
+                (user_id, item_nome, tipo)
+            )
     
-    # Buscamos o nome, a quantidade e o tipo de cada item do usuário
+    # 2. Se for MATERIAL ou CONSUMÍVEL, não ocupa slot e acumula (stack)
+    else:
+        cursor.execute("SELECT quantidade FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, item_nome))
+        item_existente = cursor.fetchone()
+        
+        if item_existente:
+            cursor.execute("UPDATE inventario SET quantidade = quantidade + ? WHERE user_id = ? AND item_nome = ?", (qtd, user_id, item_nome))
+        else:
+            cursor.execute("INSERT INTO inventario (user_id, item_nome, tipo, quantidade) VALUES (?, ?, ?, ?)", (user_id, item_nome, tipo, qtd))
+
+    conn.commit()
+    conn.close()
+    return True, "Item adicionado!"
+
+def get_inventario(user_id):
+    """Busca todos os itens, incluindo o ID único e o nível de refino."""
+    conn = conectar()
+    cursor = conn.cursor()
     cursor.execute(
-        "SELECT item_nome, quantidade, tipo FROM inventario WHERE user_id = ?", 
+        "SELECT id, item_nome, quantidade, tipo, equipado, nivel_refino FROM inventario WHERE user_id = ?", 
         (user_id,)
     )
-    itens = cursor.fetchall() # fetchall() traz a lista completa
+    itens = cursor.fetchall() 
     
     conn.close()
     return itens
@@ -482,16 +540,21 @@ def calcular_xp_necessario(level):
     # Lvl 1: 100 XP
     # Lvl 2: 100 + (1 * 150) = 250 XP
     # Lvl 3: 100 + (2 * 150) = 400 XP...
-    return 100 + (level - 1) * 150
+    return 100 + (level - 1) * 175
 
 def usar_pocao_cura(user_id, item_nome, cura_quantidade):
-    """Diminui o item da mochila e cura o jogador"""
+    """Diminui o item da mochila e cura o jogador considerando os bônus de equipamentos."""
     conn = conectar()
     cursor = conn.cursor()
 
-    # 1. Busca vida atual e máxima
-    cursor.execute("SELECT vida, vida_max FROM personagens WHERE user_id = ?", (user_id,))
-    jogador = cursor.fetchone()
+    # 1. Busca o jogador bruto e aplica os bônus para saber a VIDA MÁXIMA REAL
+    jogador_bruto = get_jogador(user_id)
+    if not jogador_bruto:
+        conn.close()
+        return False, "Jogador não encontrado."
+    
+    # Aplicamos os bônus (Pet + Itens) para ter o teto real de cura
+    jogador = aplicar_bonus_geral(dict(jogador_bruto))
 
     # 2. Busca o item (ignora maiúsculas no SQL)
     cursor.execute(
@@ -502,8 +565,9 @@ def usar_pocao_cura(user_id, item_nome, cura_quantidade):
 
     if not item:
         conn.close()
-        return False, "Você não possui este item!"
+        return False, f"Você não possui {item_nome}!"
 
+    # CHECAGEM CORRIGIDA: Usa o vida_max com bônus
     if jogador['vida'] >= jogador['vida_max']:
         conn.close()
         return False, "Sua vida já está cheia!"
@@ -515,7 +579,7 @@ def usar_pocao_cura(user_id, item_nome, cura_quantidade):
     else:
         cursor.execute("DELETE FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, nome_real))
 
-    # 4. Aplica a cura
+    # 4. Aplica a cura limitada ao máximo real
     nova_vida = min(jogador['vida'] + cura_quantidade, jogador['vida_max'])
     cursor.execute("UPDATE personagens SET vida = ? WHERE user_id = ?", (nova_vida, user_id))
 
@@ -529,23 +593,23 @@ def calcular_xp_pet(level):
     # Lvl 1: 50 | Lvl 2: 100 | Lvl 3: 150...
     return 50 + (level - 1) * 200
 
-def dar_xp_pet(user_id, item_nome, xp_por_unidade, qtd):
-    """Dá XP ao Pet e processa level ups com custo progressivo"""
+def dar_xp_pet(user_id, pet_id, item_nome, xp_por_unidade, qtd):
+    """Dá XP a um pet específico e processa level ups"""
     conn = conectar()
     cursor = conn.cursor()
 
-    # 1. Busca os dados atuais
+    # 1. Busca os dados do pet específico
     cursor.execute("""
-        SELECT pet_nome, pet_xp, pet_level, pet_vida, pet_ataque, pet_defesa, pet_agilidade 
-        FROM personagens WHERE user_id = ?
-    """, (user_id,))
-    jogador = cursor.fetchone()
+        SELECT nome, xp, level, vida, ataque, defesa, agilidade, equipado 
+        FROM pets_jogador WHERE id = ? AND user_id = ?
+    """, (pet_id, user_id))
+    pet = cursor.fetchone()
 
-    if not jogador or not jogador['pet_nome']:
+    if not pet:
         conn.close()
-        return False, "Você ainda não possui um pet."
+        return False, "Pet não encontrado."
 
-    # 2. Verifica estoque
+    # 2. Verifica estoque de comida
     cursor.execute("SELECT quantidade FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, item_nome))
     item = cursor.fetchone()
     
@@ -559,40 +623,46 @@ def dar_xp_pet(user_id, item_nome, xp_por_unidade, qtd):
     else:
         cursor.execute("DELETE FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, item_nome))
 
-    # 4. Lógica de XP Progressivo
+    # 4. Lógica de XP e Level Up (Regra: 50 + (Lvl-1) * 50)
     xp_ganho_total = xp_por_unidade * qtd
-    novo_xp = (jogador['pet_xp'] or 0) + xp_ganho_total
-    novo_lvl = jogador['pet_level'] if jogador['pet_level'] else 1
-    
-    n_vida, n_atq, n_def, n_agi = jogador['pet_vida'], jogador['pet_ataque'], jogador['pet_defesa'], jogador['pet_agilidade']
+    novo_xp = (pet['xp'] or 0) + xp_ganho_total
+    novo_lvl = pet['level']
+    n_vida, n_atq, n_def, n_agi = pet['vida'], pet['ataque'], pet['defesa'], pet['agilidade']
     
     levels_ganhos = 0
-    # O custo (threshold) agora muda a cada nível que o pet sobe
     while True:
-        xp_necessario = calcular_xp_pet(novo_lvl)
+        xp_necessario = 50 + (novo_lvl - 1) * 50
         if novo_xp >= xp_necessario:
             novo_xp -= xp_necessario
             novo_lvl += 1
             levels_ganhos += 1
-            n_vida += 1; n_atq += 1; n_def += 1; n_agi += 1
+            # Aumenta atributos (Ajuste conforme seu balanceamento)
+            n_vida += 2; n_atq += 1; n_def += 1; n_agi += 1
         else:
             break
 
+    # 5. Atualiza a tabela de pets
     cursor.execute("""
-        UPDATE personagens 
-        SET pet_xp = ?, pet_level = ?, pet_vida = ?, pet_ataque = ?, pet_defesa = ?, pet_agilidade = ?
-        WHERE user_id = ?
-    """, (novo_xp, novo_lvl, n_vida, n_atq, n_def, n_agi, user_id))
+        UPDATE pets_jogador 
+        SET xp = ?, level = ?, vida = ?, ataque = ?, defesa = ?, agilidade = ?
+        WHERE id = ?
+    """, (novo_xp, novo_lvl, n_vida, n_atq, n_def, n_agi, pet_id))
+
+    # 6. SE ESTIVER EQUIPADO: Sincroniza com a tabela personagens
+    if pet['equipado'] == 1:
+        cursor.execute("""
+            UPDATE personagens 
+            SET pet_level = ? WHERE user_id = ?
+        """, (novo_lvl, user_id))
 
     conn.commit()
     conn.close()
     
     msg = f"Seu pet ganhou {xp_ganho_total} de XP! ✨"
     if levels_ganhos > 0:
-        msg += f"\n\n🌟 EVOLUÇÃO! Subiu {levels_ganhos} nível(is)! (Agora Lvl {novo_lvl})"
+        msg += f"\n🌟 EVOLUÇÃO! Lvl {novo_lvl}!"
     
     return True, msg
-
 
 
 def curar_personagem_total(user_id):
@@ -637,49 +707,539 @@ def get_jogador_com_bonus(user_id):
 
 
 def aplicar_bonus_pet(jogador):
-    """Aplica o bônus se o pet estiver equipado e retorna o objeto modificado"""
-    print(f"DEBUG: Aplicando bônus para pet: {jogador.get('pet_nome')}, Equipado: {jogador.get('pet_equipado')}")
-    if jogador and jogador['pet_equipado'] == 1:
-        nome = jogador['pet_nome']
+    """Aplica o bônus de 10% nos atributos corretos se o pet estiver equipado"""
+    # Verificamos se o jogador existe e se o pet_equipado está como 1
+    if jogador and jogador.get('pet_equipado') == 1:
+        nome_pet = jogador.get('pet_nome')
         
-        # 10% de bônus baseados nos status atuais
-        if nome == "Tartaruga filhote":
-            jogador['defesa_max'] += int(jogador['defesa_max'] * 0.10)
-        elif nome == "Lobo filhote":
-            jogador['ataque_max'] += int(jogador['ataque'] * 0.10)
-        elif nome == "Falcão filhote":
-            jogador['vida_max'] += int(jogador['vida'] * 0.10)
+        # 10% de bônus baseados nos status atuais do jogador
+        if nome_pet == "Tartaruga filhote":
+            # Aumenta a Defesa (usamos a chave 'defesa' que existe no banco)
+            jogador['defesa'] = int(jogador['defesa'] * 1.10)
+            
+        elif nome_pet == "Lobo filhote":
+            # Aumenta o Ataque (usamos a chave 'ataque' que existe no banco)
+            jogador['ataque'] = int(jogador['ataque'] * 1.10)
+            
+        elif nome_pet == "Falcão filhote":
+            # Aumenta a Vida Máxima (usamos a chave 'vida_max' que existe no banco)
+            jogador['vida_max'] = int(jogador['vida_max'] * 1.10)
             
     return jogador
 
 
+def get_pets_jogador(user_id):
+    """Busca todos os pets que o jogador possui"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM pets_jogador WHERE user_id = ?", (user_id,))
+    pets = cursor.fetchall()
+    conn.close()
+    return pets
 
+def equipar_pet_db(user_id, pet_id):
+    """Equipa um pet e atualiza a tabela personagens para manter a UI funcionando"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # 1. Desequipa todos na tabela de pets
+    cursor.execute("UPDATE pets_jogador SET equipado = 0 WHERE user_id = ?", (user_id,))
+    
+    # 2. Equipa o pet alvo
+    cursor.execute("UPDATE pets_jogador SET equipado = 1 WHERE id = ? AND user_id = ?", (pet_id, user_id))
+    
+    # 3. BUSCA OS DADOS DO NOVO PET PARA SINCRONIZAR
+    cursor.execute("SELECT nome, imagem FROM pets_jogador WHERE id = ?", (pet_id,))
+    pet_info = cursor.fetchone()
+    
+    if pet_info:
+        # Atualiza a tabela personagens (Onde a função exibir_mapa olha)
+        cursor.execute("""
+            UPDATE personagens 
+            SET pet_nome = ?, pet_imagem = ?, pet_equipado = 1 
+            WHERE user_id = ?
+        """, (pet_info['nome'], pet_info['imagem'], user_id))
+        
+    conn.commit()
+    conn.close()
+    return True
+
+
+def adicionar_novo_pet(user_id, pet_modelo):
+    """Adiciona um pet novo e sincroniza com a tabela personagens se for o primeiro"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Verifica se é o primeiro pet do jogador
+    cursor.execute("SELECT COUNT(*) as total FROM pets_jogador WHERE user_id = ?", (user_id,))
+    total = cursor.fetchone()['total']
+    primeiro = 1 if total == 0 else 0
+    
+    # 1. Insere na tabela de coleção
+    cursor.execute("""
+        INSERT INTO pets_jogador (user_id, nome, vida, ataque, defesa, agilidade, imagem, equipado)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, pet_modelo['nome'], pet_modelo['vida'], pet_modelo['ataque'], 
+          pet_modelo['defesa'], pet_modelo['agilidade'], pet_modelo['imagem'], primeiro))
+    
+    # 2. SE FOR O PRIMEIRO: Sincroniza com a tabela 'personagens' para os botões aparecerem
+    if primeiro:
+        cursor.execute("""
+            UPDATE personagens 
+            SET pet_nome = ?, pet_imagem = ?, pet_equipado = 1 
+            WHERE user_id = ?
+        """, (pet_modelo['nome'], pet_modelo['imagem'], user_id))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_pet_por_id(pet_id):
+    """Busca os detalhes de um pet específico na tabela pets_jogador"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM pets_jogador WHERE id = ?", (pet_id,))
+    pet = cursor.fetchone()
+    conn.close()
+    return pet
+
+
+def equipar_desequipar_db(user_id, item_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT item_nome, equipado FROM inventario WHERE id = ?", (item_id,))
+    item_inv = cursor.fetchone()
+    
+    if not item_inv:
+        conn.close()
+        return False, "Item não encontrado."
+
+    item_nome = item_inv['item_nome']
+    
+    # Busca o subtipo para saber onde equipar
+    cursor.execute("SELECT subtipo FROM itens_mestre WHERE nome = ?", (item_nome,))
+    subtipo = cursor.fetchone()['subtipo']
+    
+    # Mapeamento de subtipo para coluna
+    if subtipo == "arma":
+        coluna_perso = "arma_equipada"
+    elif subtipo == "armadura":
+        coluna_perso = "armadura_equipada"
+    elif subtipo == "conjunto":
+        coluna_perso = "set_equipado"
+    else:
+        conn.close()
+        return False, "Este tipo de item não pode ser equipado."
+
+    # LÓGICA DE TROCA
+    if item_inv['equipado'] == 1:
+        cursor.execute("UPDATE inventario SET equipado = 0 WHERE id = ?", (item_id,))
+        cursor.execute(f"UPDATE personagens SET {coluna_perso} = 'Nenhuma' WHERE user_id = ?", (user_id,))
+        msg = f"Você desequipou {item_nome}."
+    else:
+        # Desequipa outros do mesmo subtipo
+        cursor.execute("""
+            UPDATE inventario SET equipado = 0 
+            WHERE user_id = ? AND item_nome IN (SELECT nome FROM itens_mestre WHERE subtipo = ?)
+        """, (user_id, subtipo))
+        
+        cursor.execute("UPDATE inventario SET equipado = 1 WHERE id = ?", (item_id,))
+        cursor.execute(f"UPDATE personagens SET {coluna_perso} = ? WHERE user_id = ?", (item_nome, user_id))
+        msg = f"Você equipou {item_nome}!"
+
+    conn.commit()
+    conn.close()
+    return True, msg
+
+
+def calcular_bonus_equipamentos(user_id):
+    """Soma bônus dos itens + bônus de refino (+2 por nível)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT i.nivel_refino, m.subtipo, m.valor_efeito 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.user_id = ? AND i.equipado = 1
+    """, (user_id,))
+    
+    itens_equipados = cursor.fetchall()
+    conn.close()
+
+    bonus = {"ataque": 0, "defesa": 0, "vida_max": 0, "sorte": 0}
+
+    for item in itens_equipados:
+        subtipo = item['subtipo']
+        poder_extra = (item['nivel_refino'] or 0) * 2 
+        valor_total = item['valor_efeito'] + poder_extra
+
+        if subtipo == 'arma':
+            bonus['ataque'] += valor_total
+        elif subtipo == 'armadura':
+            bonus['defesa'] += valor_total
+        elif subtipo == 'conjunto':
+            bonus['ataque'] += valor_total
+            bonus['defesa'] += valor_total
+            bonus['vida_max'] += (valor_total * 2)
+            if item['nome'] == 'Bússola':
+                bonus ['sorte'] += valor_total
+            
+    return bonus
+
+
+def aplicar_bonus_geral(jogador_bruto):
+    """Aplica bônus de Equipamentos e agora os novos bônus de 10% dos Pets."""
+    jogador = dict(jogador_bruto)
+    user_id = jogador['user_id']
+
+    # 1. BÔNUS DE EQUIPAMENTOS (Armas, Armaduras, Sets)
+    bonus_itens = calcular_bonus_equipamentos(user_id)
+    jogador['ataque'] += bonus_itens['ataque']
+    jogador['defesa'] += bonus_itens['defesa']
+    jogador['vida_max'] += bonus_itens['vida_max']
+    jogador['sorte'] += bonus_itens['sorte']
+
+    # 2. BÔNUS DE PET (10% baseado no nome do pet)
+    if jogador.get('pet_equipado') == 1:
+        nome_p = jogador.get('pet_nome')
+        
+        # Bônus de Status de Combate e Utilidade (Arredondado para baixo)
+        if nome_p == "Falcão filhote" or nome_p == "Sentinela de Marfim":
+            jogador['vida_max'] = int(jogador['vida_max'] * 1.10)
+        elif nome_p == "Lobo filhote" or nome_p == "Raposa de Cinza":
+            jogador['ataque'] = int(jogador['ataque'] * 1.10)
+        elif nome_p == "Tartaruga filhote" or nome_p == "Escudeiro de Casca":
+            jogador['defesa'] = int(jogador['defesa'] * 1.10)
+        elif nome_p == "Serpente de Lodo":
+            jogador['sorte'] = int(jogador['sorte'] * 1.10)
+        elif nome_p == "Coruja de Vidro Astral":
+            jogador['critico'] = int(jogador['critico'] * 1.10)
+            
+    return jogador
+
+
+def desequipar_pet_completo_db(user_id):
+    """Desequipa o pet, mas mantém os dados básicos para a UI não quebrar"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # 1. Desequipa todos na coleção
+    cursor.execute("UPDATE pets_jogador SET equipado = 0 WHERE user_id = ?", (user_id,))
+    
+    # 2. Na tabela personagens, apenas marcamos como desequipado (0)
+    # Mantemos o nome ou limpamos, mas o 'jogador_possui_pets' agora manda na UI
+    cursor.execute("""
+        UPDATE personagens 
+        SET pet_equipado = 0 
+        WHERE user_id = ?
+    """, (user_id,))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def jogador_possui_pets(user_id):
+    """Verifica se o jogador tem pelo menos um pet na coleção (equipado ou não)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) as total FROM pets_jogador WHERE user_id = ?", (user_id,))
+        resultado = cursor.fetchone()
+        possui = resultado['total'] > 0 if resultado else False
+        return possui
+    except Exception as e:
+        print(f"Erro ao verificar posse de pets: {e}")
+        return False
+    finally:
+        conn.close()
+        
+        
+def vender_item_db(user_id, item_id):
+    """Remove o item e adiciona gold ao jogador baseado no preço da tabela mestre"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Busca o item no inventário e seu preço na tabela mestre
+    cursor.execute("""
+        SELECT i.id, i.item_nome, i.quantidade, i.equipado, m.preco_gold 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.id = ? AND i.user_id = ?
+    """, (item_id, user_id))
+    item = cursor.fetchone()
+
+    if not item:
+        conn.close()
+        return False, "Item não encontrado."
+    
+    if item['equipado'] == 1:
+        conn.close()
+        return False, "Você não pode vender um item equipado!"
+
+    # Calcula o valor de venda (Ex: 50% do preço de compra)
+    valor_venda = int(item['preco_gold'] * 0.5) * item['quantidade']
+
+    # Remove o item e dá o Gold
+    cursor.execute("DELETE FROM inventario WHERE id = ?", (item_id,))
+    cursor.execute("UPDATE personagens SET gold = gold + ? WHERE user_id = ?", (valor_venda, user_id))
+    
+    conn.commit()
+    conn.close()
+    return True, f"💰 Item vendido por {valor_venda} Gold!"
+
+
+def get_todos_equipados(user_id):
+    """Busca todos os itens que o jogador está vestindo no momento (Arma, Armadura, Set)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.id, i.item_nome, i.nivel_refino, m.valor_efeito, m.subtipo
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.user_id = ? AND i.equipado = 1
+    """, (user_id,))
+    itens = cursor.fetchall()
+    conn.close()
+    return itens
+
+def get_item_por_id_forja(item_id):
+    """Busca um item específico pelo ID para mostrar na tela de confirmação da forja"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.id, i.item_nome, i.nivel_refino, m.valor_efeito, m.subtipo
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.id = ?
+    """, (item_id,))
+    item = cursor.fetchone()
+    conn.close()
+    return item
+
+def executar_refino_db(user_id, item_id, custo_gold):
+    """Aumenta o refino se o jogador tiver gold e não tiver atingido o limite do item."""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Busca dados do item e o limite dele
+    cursor.execute("""
+        SELECT i.nivel_refino, m.nivel_max, p.gold 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        JOIN personagens p ON p.user_id = i.user_id
+        WHERE i.id = ? AND i.user_id = ?
+    """, (item_id, user_id))
+    dados = cursor.fetchone()
+
+    if not dados:
+        conn.close()
+        return False, "Erro ao buscar dados do item."
+
+    if dados['gold'] < custo_gold:
+        conn.close()
+        return False, "Ouro insuficiente! 💰"
+
+    if dados['nivel_refino'] >= dados['nivel_max']:
+        conn.close()
+        return False, f"⚠️ Este item já atingiu o nível máximo (+{dados['nivel_max']})!"
+
+    # Executa o refino
+    cursor.execute("UPDATE inventario SET nivel_refino = nivel_refino + 1 WHERE id = ?", (item_id,))
+    cursor.execute("UPDATE personagens SET gold = gold - ? WHERE user_id = ?", (custo_gold, user_id))
+    
+    conn.commit()
+    conn.close()
+    return True, "✨ Forja concluída com sucesso!"
+
+
+def criar_tabela_missoes():
+    """Cria a estrutura para missões diárias"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS missoes_diarias (
+            user_id INTEGER,
+            tipo TEXT,
+            progresso INTEGER DEFAULT 0,
+            objetivo INTEGER,
+            recompensa_gold INTEGER,
+            reivindicada INTEGER DEFAULT 0,
+            data_missao TEXT,
+            PRIMARY KEY (user_id, tipo)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_ou_criar_missoes(user_id):
+    """Busca as missões do dia. Se a data mudou, reseta o progresso."""
+    conn = conectar()
+    cursor = conn.cursor()
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    
+    # NOVAS MISSÕES DEFINIDAS AQUI
+    # Formato: (tipo, objetivo, recompensa_gold)
+    missoes_def = [
+        ('caca', 50, 500),       # Caçar 5 monstros
+        ('gold', 300, 500),     # Ganhar 300 gold em caça
+        ('pocao', 3, 150),       # Usar 3 poções em combate
+        ('forja', 2, 500),      # Realizar 1 refino no ateliê
+        ('venda', 5, 250),       # Vender 5 itens no ateliê
+        ('alimentar', 10, 180)  # Dar 10 frutas para o pet
+    ]
+    
+    missoes_finais = []
+    for tipo, obj, rec in missoes_def:
+        cursor.execute("SELECT * FROM missoes_diarias WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+        m = cursor.fetchone()
+        
+        if not m or m['data_missao'] != hoje:
+            cursor.execute("""
+                INSERT OR REPLACE INTO missoes_diarias 
+                (user_id, tipo, progresso, objetivo, recompensa_gold, reivindicada, data_missao)
+                VALUES (?, ?, 0, ?, ?, 0, ?)
+            """, (user_id, tipo, obj, rec, hoje))
+            conn.commit()
+            cursor.execute("SELECT * FROM missoes_diarias WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+            m = cursor.fetchone()
+            
+        missoes_finais.append(dict(m))
+        
+    conn.close()
+    return missoes_finais
+
+
+def atualizar_progresso_missao(user_id, tipo, valor=1):
+    """Aumenta o progresso de uma missão específica (se não estiver reivindicada)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    
+    cursor.execute("""
+        UPDATE missoes_diarias 
+        SET progresso = progresso + ? 
+        WHERE user_id = ? AND tipo = ? AND data_missao = ? AND reivindicada = 0
+    """, (valor, user_id, tipo, hoje))
+    
+    conn.commit()
+    conn.close()
+
+def reivindicar_missao_db(user_id, tipo):
+    """Dá a recompensa e marca como concluída"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM missoes_diarias WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+    missao = cursor.fetchone()
+    
+    if missao and missao['progresso'] >= missao['objetivo'] and missao['reivindicada'] == 0:
+        cursor.execute("UPDATE missoes_diarias SET reivindicada = 1 WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+        cursor.execute("UPDATE personagens SET gold = gold + ? WHERE user_id = ?", (missao['recompensa_gold'], user_id))
+        conn.commit()
+        conn.close()
+        return True, f"💰 Você recebeu {missao['recompensa_gold']} Gold!"
+    
+    conn.close()
+    return False, "Missão ainda não concluída ou já resgatada."
+
+
+def sortear_ovo_diario(user_id, mapa_id):
+    """Sorteia o drop de um ovo nomeado pela Região do mapa."""
+    jogador_bruto = get_jogador(user_id)
+    jogador = aplicar_bonus_geral(dict(jogador_bruto))
+    sorte = jogador.get('sorte', 0)
+    
+    # 5% de chance base + bônus de sorte
+    chance = 5 + (sorte * 0.5) 
+    
+    import random
+    if random.uniform(1, 100) <= chance:
+        if mapa_id == 0: return "Ovo [Vila]"
+        return f"Ovo [Região {mapa_id}]"
+    
+    return None
+
+def get_ovos_jogador(user_id):
+    """Busca apenas itens do subtipo 'ovo' no inventário do jogador."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.id, i.item_nome, i.quantidade 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.user_id = ? AND m.subtipo = 'ovo'
+    """, (user_id,))
+    ovos = cursor.fetchall()
+    conn.close()
+    return ovos
+
+
+def iniciar_incubacao_db(user_id, ovo_nome, horas):
+    """Registra o início do processo de chocar."""
+    tempo_final = datetime.now() + timedelta(hours=horas)
+    tempo_str = tempo_final.strftime("%Y-%m-%d %H:%M:%S")
+    
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO incubacao_ativa (user_id, ovo_nome, tempo_final) VALUES (?, ?, ?)",
+        (user_id, ovo_nome, tempo_str)
+    )
+    conn.commit()
+    conn.close()
+
+def get_incubacoes_ativas(user_id):
+    """Busca TODOS os ovos que o jogador está chocando no momento."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM incubacao_ativa WHERE user_id = ?", (user_id,))
+    res = cursor.fetchall() 
+    conn.close()
+    return res
+
+def remover_incubacao_por_id(incubacao_id):
+    """Remove um registro específico da incubadora pelo seu ID único."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM incubacao_ativa WHERE id = ?", (incubacao_id,))
+    conn.commit()
+    conn.close()
 
 --- ARQUIVO: .\main.py ---
-# Aqui é o motor do bot
 import database
 import admin
+import logging
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import TOKEN
-from handlers import start, cadastro
-from handlers import perfil, menu
-from handlers import login, router
-from handlers import status as handler_status
-from handlers import viagem, caca, mochila
+from handlers import start, cadastro, perfil, menu, login, router, status as handler_status, viagem, caca, mochila, atelie
 import warnings
+
+# Configuração de Logging para ver erros no console da Shard Cloud
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
-print('Bot Online!')
-print("Bot iniciado - Versão 1.0.2")
-
 def main():
-    database.criar_tabela()
-    database.popular_dados_iniciais()
-    database.atualizar_estrutura_banco()
-    admin.debug_tabela()
+    # Inicialização do Banco em ordem logica
+    database.criar_tabela()                     #Cria o que nao existe
+    database.criar_tabela_incubadora()          #Cria tabela para incubadora
+    database.criar_tabela_missoes()             #Cria a tabela de missoes diarias
+    database.atualizar_estrutura_banco()        #Adiciona colunas novas em bancos antigos
+    database.popular_dados_iniciais()           #Insere dados dos modelos
+    admin.debug_tabela()                        #debug
+    
+    # Construção do App
     app = Application.builder().token(TOKEN).build()
 
-    # Handlers (Ouvintes)
+    # Handlers
     app.add_handler(CommandHandler("start", start.inicio))
     app.add_handler(CallbackQueryHandler(login.iniciar_login, pattern='^login$'))
     app.add_handler(CallbackQueryHandler(cadastro.escolher_genero, pattern='^registrar$'))
@@ -690,7 +1250,7 @@ def main():
     app.add_handler(CallbackQueryHandler(menu.menu_principal, pattern="^menu_principal$"))
     app.add_handler(CallbackQueryHandler(start.pet, pattern="pet"))
     app.add_handler(CallbackQueryHandler(start.voltar_menu, pattern="menu"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,router.processar_texto))
+    app.add_handler(MessageHandler(filters.TEXT, router.processar_texto))
     app.add_handler(CommandHandler("sair", login.sair_conta))
     app.add_handler(CallbackQueryHandler(start.login_diario, pattern="^login_diario$"))
     app.add_handler(CallbackQueryHandler(handler_status.status, pattern="status"))
@@ -706,20 +1266,220 @@ def main():
     app.add_handler(CallbackQueryHandler(caca.voltar_turno_luta, pattern="^voltar_turno_luta$"))
     app.add_handler(CallbackQueryHandler(mochila.ver_mochila, pattern="^mochila$"))
     app.add_handler(CallbackQueryHandler(start.equipar_pet, pattern="^equipar_pet$"))
-    app.add_handler(CallbackQueryHandler(start.alimentar_pet_menu, pattern="^alimentar_menu$"))
+    app.add_handler(CallbackQueryHandler(start.alimentar_pet_menu, pattern="^alimentar_menu_"))
     app.add_handler(CallbackQueryHandler(start.executar_alimentar, pattern="^exec_alim_"))
+    app.add_handler(CallbackQueryHandler(start.ver_detalhes_pet, pattern="^ver_pet_"))
+    app.add_handler(CallbackQueryHandler(start.executar_equipar_pet, pattern="^equipar_pet_"))
+    app.add_handler(CallbackQueryHandler(mochila.detalhes_item, pattern="^item_ver_"))
+    app.add_handler(CallbackQueryHandler(mochila.executar_acao_item, pattern="^item_acao_"))
+    app.add_handler(CallbackQueryHandler(start.executar_desequipar_pet, pattern="^desequipar_pet_"))
+    app.add_handler(CallbackQueryHandler(atelie.menu_atelie, pattern="^atelie_menu$"))
+    app.add_handler(CallbackQueryHandler(atelie.listar_venda, pattern="^atelie_vender_lista_"))
+    app.add_handler(CallbackQueryHandler(atelie.executar_venda, pattern="^confirmar_venda_"))
+    app.add_handler(CallbackQueryHandler(atelie.menu_forja, pattern="^atelie_forja_menu$"))
+    app.add_handler(CallbackQueryHandler(atelie.executar_forja, pattern="^executar_forja_"))
+    app.add_handler(CallbackQueryHandler(atelie.detalhes_forja_item, pattern="^forja_ver_"))
+    app.add_handler(CallbackQueryHandler(start.reivindicar_missao_callback, pattern="^resgatar_missao_"))
+    app.add_handler(CallbackQueryHandler(start.abrir_incubadora, pattern="^abrir_incubadora$"))
+    app.add_handler(CallbackQueryHandler(start.chocar_ovo_selecionado, pattern="^chocar_selecionado_"))
+    app.add_handler(CallbackQueryHandler(start.finalizar_chocar_callback, pattern="^finalizar_chocar_"))
     
     
-    # ... outros handlers
-    print("Bot aguardando mensagens...")
-    app.run_polling()
+    # drop_pending_updates=True limpa comandos antigos que foram enviados enquanto o bot estava off
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    main()
+        main()
+        
+
+
+--- ARQUIVO: .\handlers\atelie.py ---
+# --- ARQUIVO: .\handlers\atelie.py ---
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+import database
+
+async def menu_atelie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menu principal do Ateliê"""
+    query = update.callback_query
+    await query.answer()
+    
+    texto = (
+        "🛠️ Ateliê\n"
+        "Bem-vindo ao ateliê! Aqui você pode transformar seus itens.\n\n"
+        "⚒️ Forja: Melhore seus equipamentos.\n"
+        "⚗️ Alquimia: Crie poções (Em breve).\n"
+        "💰 Venda: Desfaça-se do que não usa."
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("💰 Vender Itens", callback_data="atelie_vender_lista_0")],
+        [InlineKeyboardButton("⚒️ Forjar", callback_data="atelie_forja_menu")],
+        [InlineKeyboardButton("⬅️ Voltar", callback_data="ir_0")]
+    ]
+    
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def listar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lista itens para venda (paginado)"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    pagina = int(query.data.split("_")[-1])
+    
+    itens = database.get_inventario(user_id)
+    # Só podemos vender o que NÃO está equipado
+    vendeis = [i for i in itens if i['equipado'] == 0]
+    
+    itens_por_pagina = 8
+    inicio = pagina * itens_por_pagina
+    fim = inicio + itens_por_pagina
+    itens_pagina = vendeis[inicio:fim]
+
+    texto = f"💰 Loja (Página {pagina + 1})\nEscolha o que deseja vender (70% do valor):"
+    keyboard = []
+
+    for item in itens_pagina:
+        keyboard.append([InlineKeyboardButton(f"Vender {item['item_nome']} (x{item['quantidade']})", callback_data=f"confirmar_venda_{item['id']}")])
+
+    nav = []
+    if pagina > 0: nav.append(InlineKeyboardButton("⬅️", callback_data=f"atelie_vender_lista_{pagina-1}"))
+    if fim < len(vendeis): nav.append(InlineKeyboardButton("➡️", callback_data=f"atelie_vender_lista_{pagina+1}"))
+    if nav: keyboard.append(nav)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Voltar", callback_data="atelie_menu")])
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def executar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processa a venda após o clique"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    item_id = int(query.data.split("_")[-1])
+    
+    sucesso, msg = database.vender_item_db(user_id, item_id)
+    await query.answer(msg, show_alert=True)
+    database.atualizar_progresso_missao(user_id, 'venda', 1)
+    
+    # Atualiza a lista de venda
+    query.data = "atelie_vender_lista_0"
+    await listar_venda(update, context)
     
 
+async def menu_forja(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lista todos os equipamentos que o jogador está vestindo para escolher qual forjar"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    itens_equipados = database.get_todos_equipados(user_id)
+    
+    if not itens_equipados:
+        await query.edit_message_caption(
+            caption="❌ Você não está usando nenhum equipamento!\nEquipe algo na mochila para poder forjar.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Voltar", callback_data="atelie_menu")]])
+        )
+        return
+
+    texto = "⚒️ Forja\nQual equipamento você deseja fortalecer hoje?"
+    keyboard = []
+
+    for item in itens_equipados:
+        # Define um emoji baseado no tipo
+        emoji = "⚔️" if item['subtipo'] == 'arma' else "🛡️"
+        label = f"{emoji} {item['item_nome']} (+{item['nivel_refino']})"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"forja_ver_{item['id']}")])
+
+    keyboard.append([InlineKeyboardButton("⬅️ Voltar", callback_data="atelie_menu")])
+    
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def executar_forja(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Executa a forja e exibe os botões de continuação."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    
+    dados = query.data.split("_")
+    item_id = int(dados[2])
+    custo = int(dados[3])
+    
+    sucesso, msg = database.executar_refino_db(user_id, item_id, custo)
+    database.atualizar_progresso_missao(user_id, 'forja', 1)
+    
+    if not sucesso:
+        await query.answer(msg, show_alert=True)
+        await menu_forja(update, context)
+        return
+
+    await query.answer(msg)
+    
+    # BUSCA DADOS ATUALIZADOS PARA O BOTÃO DINÂMICO
+    item_atualizado = database.get_item_por_id_forja(item_id)
+    proximo_nivel = item_atualizado['nivel_refino'] + 1
+    novo_custo = 100 + (item_atualizado['nivel_refino'] * 150)
+
+    texto_sucesso = (
+        f"✨ Sucesso!\n\n"
+        f"Seu {item_atualizado['item_nome']} agora é +{item_atualizado['nivel_refino']}.\n"
+        "Deseja continuar forjando?"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(f"🔨 Forjar +{proximo_nivel}", callback_data=f"forja_ver_{item_id}")],
+        [InlineKeyboardButton("⬅️ Voltar", callback_data="atelie_forja_menu")]
+    ]
+
+    await query.edit_message_caption(caption=texto_sucesso, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    
+    
+async def detalhes_forja_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostra os custos e valida se o item pode ser forjado."""
+    query = update.callback_query
+    await query.answer()
+    
+    item_id = int(query.data.split("_")[-1])
+    # Buscamos também o nivel_max agora
+    conn = database.conectar()
+    item = conn.execute("""
+        SELECT i.id, i.item_nome, i.nivel_refino, m.valor_efeito, m.subtipo, m.nivel_max 
+        FROM inventario i JOIN itens_mestre m ON i.item_nome = m.nome WHERE i.id = ?
+    """, (item_id,)).fetchone()
+    conn.close()
+
+    if not item: return
+
+    nivel_atual = item['nivel_refino']
+    
+    # VERIFICA LIMITE
+    if nivel_atual >= item['nivel_max']:
+        texto = f"⭐ {item['item_nome']} +{nivel_atual}\n\nEste item atingiu o potencial máximo de forja!"
+        keyboard = [[InlineKeyboardButton("⬅️ Voltar", callback_data="atelie_forja_menu")]]
+        await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    proximo_lvl = nivel_atual + 1
+    custo = 100 + (nivel_atual * 200)
+    tipo_bonus = "ATQ" if item['subtipo'] == 'arma' else "DEF"
+    bonus_atual = item['valor_efeito'] + (nivel_atual * 2)
+    bonus_prox = item['valor_efeito'] + (proximo_lvl * 2)
+
+    texto = (
+        f"⚒️ Melhorando {item['item_nome']}\n"
+        f"Nível: +{nivel_atual} ➔ +{proximo_lvl}\n"
+        f"Poder: {tipo_bonus} {bonus_atual} ➔ {tipo_bonus} {bonus_prox}\n"
+        f"Limite do Item: +{item['nivel_max']}\n\n"
+        f"💰 Custo: {custo} Gold"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(f"🔨 Forjar (+{proximo_lvl})", callback_data=f"executar_forja_{item['id']}_{custo}")],
+        [InlineKeyboardButton("⬅️ Escolher Outro", callback_data="atelie_forja_menu")]
+    ]
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
 --- ARQUIVO: .\handlers\caca.py ---
-#Lógica da caça
+# Lógica da caça
 
 import os
 import random
@@ -732,12 +1492,17 @@ async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
     
-    # Cura o jogador para o padrão Arcade
-    database.curar_personagem_total(user_id)
-    jogador = database.get_jogador(user_id)
+    # 1. BUSCA O JOGADOR E APLICA OS BÔNUS (EQUIPAMENTOS + PET)
+    jogador_bruto = database.get_jogador(user_id)
+    if not jogador_bruto: return
     
-    if not jogador: return
-
+    # Transformamos em dicionário e aplicamos os bônus dinâmicos
+    jogador = database.aplicar_bonus_geral(dict(jogador_bruto))
+    
+    # 2. CURA PARA O MÁXIMO REAL (COM BÔNUS)
+    # Agora o seu HP no banco será atualizado para 320 (no seu exemplo)
+    database.curar_personagem_custom(user_id, jogador['vida_max'])
+    
     mapa_id = jogador['mapa_atual']
     inimigo_db = database.get_monstro_aleatorio(mapa_id)
     
@@ -745,7 +1510,7 @@ async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Nenhum monstro nesta área...")
         return
 
-    # SALVA O ESTADO DA LUTA (Repare que não salvamos mais drops aqui)
+    # 3. SALVA O ESTADO DA LUTA COM O HP CORRETO
     context.user_data["luta"] = {
         "inimigo_nome": inimigo_db['nome'],
         "inimigo_vida": inimigo_db['vida'],
@@ -755,14 +1520,16 @@ async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "inimigo_xp": inimigo_db['xp_recompensa'],
         "inimigo_gold": inimigo_db['gold_recompensa'],
         "inimigo_img": inimigo_db['imagem'],
-        "player_vida": jogador['vida'],
-        "mapa_id": mapa_id
+        "player_vida": jogador['vida_max'], # Começa com o HP total (320)
+        "player_vida_max": jogador['vida_max'], # Guarda o limite real
+        "mapa_id": mapa_id,
+        "processando": False
     }
 
     texto = (
-        f"⚔️ Um {inimigo_db['nome']} bloqueia seu caminho!\n\n"
+        f"⚔️Surge {inimigo_db['nome']} no seu caminho!\n\n"
         f"👾 HP: {inimigo_db['vida']}/{inimigo_db['vida']}\n"
-        f"👤 Seu HP: {jogador['vida']}/{jogador['vida_max']}\n\n"
+        f"👤 Seu HP: {jogador['vida_max']}/{jogador['vida_max']}\n\n"
         f"Prepare-se para o combate!"
     )
 
@@ -783,225 +1550,160 @@ async def procurar_monstro(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def atacar_turno(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Executa o turno de ataque com dano randomizado"""
+    """Executa o ataque com trava de segurança contra cliques duplos."""
     query = update.callback_query
-    await query.answer()
-    
     user_id = query.from_user.id
     luta = context.user_data.get("luta")
     
     if not luta:
-        await query.edit_message_caption("❌ Erro: Luta não encontrada.")
+        await query.answer("❌ Erro: Luta não encontrada.")
         return
+
+    if luta.get('processando'):
+        await query.answer("⏳ Aguarde o turno do oponente terminar!", show_alert=True)
+        return
+
+    luta['processando'] = True 
+    await query.answer()
 
     jogador_base = database.get_jogador(user_id)
-    jogador = database.aplicar_bonus_pet(dict(jogador_base))
+    jogador = database.aplicar_bonus_geral(jogador_base)
 
-    # --- 1. ATAQUE DO JOGADOR (RANDOMIZADO) ---
+    # 1. ATAQUE DO JOGADOR
     dano_base_player = max(1, jogador['ataque'] - (luta['inimigo_def'] // 2))
-    multiplicador_p = random.uniform(0.8, 1.2)
-    dano_final_player = int(dano_base_player * multiplicador_p)
-    if dano_final_player < 1: dano_final_player = 1 
-
+    dano_final_player = int(dano_base_player * random.uniform(0.8, 1.2))
     luta['inimigo_vida'] -= dano_final_player
     
-    # --- BLOCO DE VITÓRIA ---
     if luta['inimigo_vida'] <= 0:
-        novo_xp = jogador['xp'] + luta['inimigo_xp']
-        novo_gold = jogador['gold'] + luta['inimigo_gold']
-            
-        # Sorteio de Drop Aleatório do Mapa
-        item_dropado = database.get_drop_aleatorio(luta['mapa_id'])
-        mensagem_drop = ""
-            
-        if item_dropado:
-            tipo_item = "consumivel" if "Poção" in item_dropado or "Maçã" in item_dropado else "material"
-            sucesso, _ = database.adicionar_item_inventario(user_id, item_dropado, tipo_item, 1)
-            if sucesso:
-                mensagem_drop = f"🎁 Drop: {item_dropado}\n"
-
-        # Atualiza banco com xp e gold
-        conn = database.conectar()
-        conn.execute("UPDATE personagens SET xp = ?, gold = ?, vida = ? WHERE user_id = ?", 
-                     (novo_xp, novo_gold, luta['player_vida'], user_id))
-        conn.commit()
-        conn.close()
-
-        texto_resultado = (
-            f"🏆 VITÓRIA!\n\n"
-            f"Você derrotou o {luta['inimigo_nome']}!\n"
-            f"💰 +{luta['inimigo_gold']} Gold | ✨ +{luta['inimigo_xp']} XP\n"
-            f"{mensagem_drop}"
-        )
-        
-        # Verifica Level Up
-        xp_necessario = database.calcular_xp_necessario(jogador['level'])
-        if novo_xp >= xp_necessario:
-            status_novos = database.subir_de_nivel(user_id)
-            if status_novos: texto_resultado += f"\n🌟 LEVEL UP! Nível {status_novos['level']}!\n"
-
-        keyboard = [
-            [InlineKeyboardButton("⚔️ Caçar novamente", callback_data=f"procurar_{luta['mapa_id']}")],
-            [InlineKeyboardButton("🏃 Voltar", callback_data=f"ir_{luta['mapa_id']}")]
-        ]
-        
-        context.user_data["luta"] = None 
-        await query.edit_message_caption(caption=texto_resultado, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        luta['processando'] = False
+        await processar_vitoria(query, context, jogador, luta, dano_final_player)
         return
 
-    # --- 2. TURNO DO MONSTRO (SE ELE SOBREVIVEU) ---
-    texto_feedback = f"⚔️ Combate\n\n👤 Você causou {dano_final_player} de dano!\n⏳ O {luta['inimigo_nome']} está atacando..."
-    await query.edit_message_caption(caption=texto_feedback, reply_markup=None, parse_mode="Markdown")
+    texto_feedback = (
+        f"⚔️ Combate\n\n"
+        f"👤 Você causou {dano_final_player} de dano!\n"
+        f"⏳ {luta['inimigo_nome']} está contra-atacando..."
+    )
+    await query.edit_message_caption(caption=texto_feedback, reply_markup=query.message.reply_markup, parse_mode="Markdown")
     
-    await asyncio.sleep(1.0) 
+    await asyncio.sleep(2.5) 
 
+    # 2. TURNO DO MONSTRO
     dano_base_monstro = max(1, luta['inimigo_atq'] - (jogador['defesa'] // 2))
-    multiplicador_m = random.uniform(0.8, 1.2)
-    dano_final_monstro = int(dano_base_monstro * multiplicador_m)
-    if dano_final_monstro < 1: dano_final_monstro = 1
-
+    dano_final_monstro = int(dano_base_monstro * random.uniform(0.8, 1.2))
     luta['player_vida'] -= dano_final_monstro
 
+    # Sincroniza vida no banco
     conn = database.conectar()
     conn.execute("UPDATE personagens SET vida = ? WHERE user_id = ?", (max(0, luta['player_vida']), user_id))
     conn.commit()
     conn.close()
 
-    # Check Derrota
     if luta['player_vida'] <= 0:
-        texto_derrota = f"💀 DERROTA!\n\nO {luta['inimigo_nome']} causou {dano_final_monstro} de dano e te derrotou!"
-        keyboard = [[InlineKeyboardButton("Voltar", callback_data="ir_0")]]
+        luta['processando'] = False
+        texto_derrota = f"💀 Derrota!\n\nO {luta['inimigo_nome']} te venceu."
+        keyboard = [[InlineKeyboardButton("Voltar para Vila", callback_data="ir_0")]]
         context.user_data["luta"] = None
         await query.edit_message_caption(caption=texto_derrota, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         return
 
-    log = f"👤 Causou {dano_final_player} de dano\n👾 Recebeu {dano_final_monstro} de dano"
+    luta['processando'] = False 
+    log = f"Você causou {dano_final_player} de dano\nInimigo causou {dano_final_monstro} de dano"
     await voltar_turno_luta(update, context, log)
-    
 
-async def usar_pocao_luta(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    # Menu de seleção de poções
-    texto_escolha = "🧪 *Menu de Alquimia*\n\nQual poção deseja usar?"
-
-    keyboard = [
-        [InlineKeyboardButton("🧪 Poção Pequena ( 20%)", callback_data="itemluta_Poção pequena")],
-        [InlineKeyboardButton("🧪 Poção Média (50%)", callback_data="itemluta_Poção média")],
-        [InlineKeyboardButton("🧪 Poção Grande (85%)", callback_data="itemluta_Poção grande")],
-        [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar_turno_luta")]
-    ]
-
-    await query.edit_message_caption(
-        caption=texto_escolha, 
-        reply_markup=InlineKeyboardMarkup(keyboard), 
-        parse_mode="Markdown"
-    )
-    
-    
-async def voltar_ao_mapa(update, context):
-    query = update.callback_query
-    await query.answer("Vida recuperada!")
-    
-    user_id = query.from_user.id
-    
-    # --- NOVIDADE: Cura 100% ao sair da tela de combate ---
-    database.curar_personagem_total(user_id)
-    
-    jogador = database.get_jogador(user_id)
-    mapa_id = jogador['mapa_atual']
-    
-    context.user_data["luta"] = None 
-
-    from handlers.viagem import exibir_mapa
-    await exibir_mapa(update, context, mapa_id)
-    
-    
 async def confirmar_cura_luta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cura o jogador e aguarda o contra-ataque com trava de turno."""
     query = update.callback_query
     user_id = query.from_user.id
     luta = context.user_data.get("luta")
     
-    if not luta:
-        await query.answer("Luta encerrada!")
+    if not luta or luta.get('processando'):
+        await query.answer("Aguarde!")
         return
 
-    # 1. Busca os dados atuais do jogador (precisamos da vida_max)
-    jogador = database.get_jogador(user_id)
-    vida_max_player = jogador['vida_max']
-
-    # 2. Identifica o item e define a porcentagem
+    luta['processando'] = True
+    
+    #Pegar o jogador com bônus para calcular a porcentagem de cura real
+    jogador_base = database.get_jogador(user_id)
+    jogador = database.aplicar_bonus_geral(dict(jogador_base))
+    
     item_escolhido = query.data.split("_")[1]
     
-    porcentagens = {
-        "poção pequena": 0.20,
-        "poção média": 0.50,
-        "poção grande": 0.85
-    }
-    
+    porcentagens = {"poção pequena": 0.20, "poção média": 0.50, "poção grande": 0.85}
     multiplicador = porcentagens.get(item_escolhido.lower(), 0.20)
     
-    # 3. CALCULA O VALOR REAL DA CURA
-    # Ex: Se tiver 200 de vida max, poção média cura int(200 * 0.50) = 100
-    valor_cura = int(vida_max_player * multiplicador)
+    # Valor de cura agora baseado no HP Máximo com Bônus
+    valor_cura = int(jogador['vida_max'] * multiplicador)
 
-    # 4. Tenta usar no banco (A função usar_pocao_cura já limita ao máximo de HP)
     sucesso, mensagem_banco = database.usar_pocao_cura(user_id, item_escolhido, valor_cura)
 
     if not sucesso:
+        luta['processando'] = False
         await query.answer(mensagem_banco, show_alert=True)
         return
 
-    # 5. Atualiza a vida na memória da luta e avisa o jogador
-    jogador_pos_cura = database.get_jogador(user_id)
-    luta['player_vida'] = jogador_pos_cura['vida'] 
-
-    await query.answer(f"Cura aplicada: +{valor_cura} HP!")
+    await query.answer(f"💉 Curou {valor_cura} HP!")
+    luta['player_vida'] = database.get_jogador(user_id)['vida']
+    database.atualizar_progresso_missao(user_id, 'pocao', 1)
     
-    texto_feedback = (
-        f"💉 Você usou {item_escolhido}!\n"
-        f"✨ Recuperou {valor_cura} HP.\n"
-        f"❤️ Vida: {luta['player_vida']}/{vida_max_player}\n\n"
-        f"⏳ O {luta['inimigo_nome']} está atacando..."
-    )
+    texto_feedback = f"💉 Você usou {item_escolhido}!\n⏳ O {luta['inimigo_nome']} aproveita tua guarda baixa para atacar..."
+    await query.edit_message_caption(caption=texto_feedback, reply_markup=query.message.reply_markup, parse_mode="Markdown")
     
-    await query.edit_message_caption(caption=texto_feedback, reply_markup=None, parse_mode="Markdown")
-
-    # Turno do Inimigo (Contra-ataque)
-    await asyncio.sleep(1.5)
+    await asyncio.sleep(2)
     
-    dano_monstro = max(1, luta['inimigo_atq'] - (jogador_pos_cura['defesa'] // 2))
+    jogador_bonus = database.aplicar_bonus_geral(database.get_jogador(user_id))
+    dano_monstro = max(1, luta['inimigo_atq'] - (jogador_bonus['defesa'] // 2))
     luta['player_vida'] -= dano_monstro
 
-    # Sincroniza o dano sofrido com o Banco de Dados
     conn = database.conectar()
     conn.execute("UPDATE personagens SET vida = ? WHERE user_id = ?", (max(0, luta['player_vida']), user_id))
     conn.commit()
     conn.close()
 
+    luta['processando'] = False
     if luta['player_vida'] <= 0:
-        keyboard = [[InlineKeyboardButton("🏰 Voltar", callback_data="ir_0")]]
         context.user_data["luta"] = None
-        await query.edit_message_caption(
-            caption=f"💀 O {luta['inimigo_nome']} te nocauteou!",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        await query.edit_message_caption(caption="💀 Você foi nocauteado!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Voltar", callback_data="ir_0")]]))
     else:
-        await voltar_turno_luta(update, context)
+        await voltar_turno_luta(update, context, f"🧪 Curou {valor_cura} HP\nRecebeu {dano_monstro} de dano")
 
+async def usar_pocao_luta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    luta = context.user_data.get("luta")
+    if luta and luta.get('processando'):
+        await query.answer("⏳ Aguarde o turno do oponente!", show_alert=True)
+        return
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("🧪 Poção Pequena (20%)", callback_data="itemluta_Poção pequena")],
+        [InlineKeyboardButton("🧪 Poção Média (50%)", callback_data="itemluta_Poção média")],
+        [InlineKeyboardButton("🧪 Poção Grande (85%)", callback_data="itemluta_Poção grande")],
+        [InlineKeyboardButton("⬅️ Voltar", callback_data="voltar_turno_luta")]
+    ]
+    await query.edit_message_caption(caption="Qual poção deseja usar?", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def voltar_ao_mapa(update, context):
+    """Função chamada ao fugir ou vencer para retornar ao mapa de origem."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    database.curar_personagem_total(user_id)
+    jogador = database.get_jogador(user_id)
+    mapa_id = jogador['mapa_atual']
+    context.user_data["luta"] = None 
+
+    from handlers.viagem import exibir_mapa
+    await exibir_mapa(update, context, mapa_id)
 
 async def voltar_turno_luta(update: Update, context: ContextTypes.DEFAULT_TYPE, log_combate=""):
-    """Reconstrói o menu de ataque exibindo o log de dano"""
+    """Reconstrói o menu de ataque exibindo o HP Efetivo (com bônus)"""
     query = update.callback_query
     user_id = query.from_user.id
     luta = context.user_data.get("luta")
     
     if not luta: return
 
-    jogador = database.get_jogador(user_id)
     itens = database.get_inventario(user_id)
-    # Verificação robusta de poção
     tem_pocao = any("poção" in i['item_nome'].lower() for i in itens)
 
     keyboard = [[InlineKeyboardButton("⚔️ Atacar", callback_data="atacar_turno")]]
@@ -1009,14 +1711,14 @@ async def voltar_turno_luta(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         keyboard.append([InlineKeyboardButton("🧪 Usar poção", callback_data="luta_usar_pocao")])
     keyboard.append([InlineKeyboardButton("🏃 Fugir", callback_data="fugir_luta")])
 
-    # CORREÇÃO 1: Preparando o texto do log para aparecer na mensagem
     log_texto = f"📝 Último Turno:\n_{log_combate}_\n\n" if log_combate else ""
 
+    # USAMOS luta['player_vida_max'] que salvamos no início para mostrar o limite real
     texto = (
         f"⚔️ Combate em andamento\n\n"
         f"{log_texto}"
         f"👾 {luta['inimigo_nome']}: ❤️ {luta['inimigo_vida']}/{luta['inimigo_vida_max']}\n"
-        f"👤 Você: ❤️ {luta['player_vida']}/{jogador['vida_max']}\n\n"
+        f"👤 Você: ❤️ {luta['player_vida']}/{luta['player_vida_max']}\n\n"
         f"Sua vez! O que vai fazer?"
     )
 
@@ -1025,6 +1727,75 @@ async def voltar_turno_luta(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         reply_markup=InlineKeyboardMarkup(keyboard), 
         parse_mode="Markdown"
     )
+
+async def processar_vitoria(query, context, jogador, luta, dano_final):
+    user_id = query.from_user.id
+    
+    # --- CÁLCULO DE BÔNUS DO PET ---
+    bonus_xp = 1.0
+    bonus_gold = 1.0
+    
+    if jogador.get('pet_equipado') == 1:
+        nome_pet = jogador.get('pet_nome')
+        if nome_pet == "Morcego de Ébano":
+            bonus_xp = 1.10
+        elif nome_pet == "Escopião de Bronze":
+            bonus_gold = 1.10
+
+    # Recompensas finais com bônus aplicado
+    xp_final = int(luta['inimigo_xp'] * bonus_xp)
+    gold_final = int(luta['inimigo_gold'] * bonus_gold)
+    # --- FIM DOS BÔNUS ---
+
+    database.atualizar_progresso_missao(user_id, 'caca', 1)
+    database.atualizar_progresso_missao(user_id, 'gold', gold_final)
+    
+    novo_xp = jogador['xp'] + xp_final
+    novo_gold = jogador['gold'] + gold_final
+            
+    item_dropado = database.get_drop_aleatorio(luta['mapa_id'])
+    # Se for o pet Draco de Mica, a chance de drop extra de ovo é tratada aqui (Exemplo de lógica)
+    ovo_dropado = database.sortear_ovo_diario(user_id, luta['mapa_id'])
+    
+    mensagem_drop = ""
+    
+    if item_dropado:
+        from modelos.itens import buscar_dados_item
+        dados = buscar_dados_item(item_dropado)
+        database.adicionar_item_inventario(user_id, dados['nome'], dados['tipo'], 1)
+        mensagem_drop += f"🎁 Drop: {item_dropado}\n"
+        
+    if ovo_dropado:
+        # Adiciona o ovo específico (invisivelmente vinculado ao mapa)
+        database.adicionar_item_inventario(user_id, ovo_dropado, 'consumivel', 1)
+        # Na mensagem para o jogador, mostramos apenas "Ovo"
+        mensagem_drop += f"🥚 EXTRA: Você encontrou um Ovo!\n"
+
+    conn = database.conectar()
+    conn.execute("UPDATE personagens SET xp = ?, gold = ?, vida = ? WHERE user_id = ?", 
+                 (novo_xp, novo_gold, luta['player_vida'], user_id))
+    conn.commit()
+    conn.close()
+
+    texto = (
+        f"🏆 Vitória!!\n\n"
+        f"Dano Final: {dano_final}\n"
+        f"💰 +{luta['inimigo_gold']} Gold | ✨ +{luta['inimigo_xp']} XP\n"
+        f"{mensagem_drop}"
+    )
+    
+    if novo_xp >= database.calcular_xp_necessario(jogador['level']):
+        status = database.subir_de_nivel(user_id)
+        if status: texto += f"\n🌟 LEVEL UP! Nível {status['level']}!"
+
+    keyboard = [
+        [InlineKeyboardButton("⚔️ Caçar novamente", callback_data=f"procurar_{luta['mapa_id']}")],
+        [InlineKeyboardButton("Voltar", callback_data=f"ir_{luta['mapa_id']}")]
+    ]
+    context.user_data["luta"] = None 
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
 
 --- ARQUIVO: .\handlers\cadastro.py ---
 # Lógica de gênero e Nick
@@ -1151,99 +1922,68 @@ async def processar_texto_cadastro(update: Update, context: ContextTypes.DEFAULT
 from telegram import Update
 from telegram.ext import ContextTypes
 import database
-from handlers import menu
-
+# Usamos a importação direta para evitar problemas de circularidade
+import handlers.menu as menu
 
 async def iniciar_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     context.user_data["login_etapa"] = "nick"
-
-    await query.edit_message_caption(
-        "🔐 LOGIN\n\nDigite seu Nick:"
-    )
+    await query.edit_message_caption("🔐 Login\n\nDigite seu Nick:")
     
-    
-async def processar_login(update, context):
+async def processar_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     etapa = context.user_data.get("login_etapa")
 
-    # ETAPA 1: nick
     if etapa == "nick":
         context.user_data["login_nick"] = update.message.text
         context.user_data["login_etapa"] = "senha"
         await update.message.reply_text("🔑 Agora digite sua senha:")
         return
 
-    # ETAPA 2: senha
     elif etapa == "senha":
         nick = context.user_data.get("login_nick")
         senha_digitada = update.message.text.strip()
-
         jogador = database.buscar_personagem_por_nick(nick)
         
         if not jogador:
-            print("DEBUG LOGIN: Jogador não encontrado.")
             await update.message.reply_text("❌ Personagem não encontrado.")
+            context.user_data.clear()
             return
 
-        print(f"DEBUG LOGIN: Jogador encontrado. Tipo de dado: {type(jogador)}")
-        
-        try:
-            # Vamos tentar acessar a senha de duas formas para garantir
-            senha_banco = None
-            
-            # Tenta via Chave (sqlite3.Row)
-            try:
-                senha_banco = jogador['senha']
-                print(f"DEBUG LOGIN: Senha obtida via chave ['senha']: {senha_banco}")
-            except:
-                # Tenta via índice (caso a row_factory falhe)
-                senha_banco = jogador[4]
-                print(f"DEBUG LOGIN: Senha obtida via índice [4]: {senha_banco}")
+        senha_banco = jogador['senha']
 
-            if str(senha_banco) == str(senha_digitada):
-                print("DEBUG LOGIN: Senha confere! Logando...")
-                context.user_data.clear() 
-                context.user_data["personagem_logado"] = nick 
-                await update.message.reply_text(f"✅ Login OK! Bem-vindo, {nick}!")
-                await menu.menu_principal(update, context)
-            else:
-                print(f"DEBUG LOGIN: Senha incorreta. Banco: '{senha_banco}' vs Digitada: '{senha_digitada}'")
-                context.user_data.clear()
-                await update.message.reply_text("❌ Senha incorreta.")
-
-        except Exception as e:
-            print(f"DEBUG LOGIN: OCORREU UM ERRO GRAVE NO LOGIN: {e}")
-            await update.message.reply_text("❌ Erro interno no login. Verifique o console.")
+        if str(senha_banco) == str(senha_digitada):
+            print(f"DEBUG LOGIN: Sucesso para {nick}. Chamando menu...")
+            # Limpa dados temporários de login mas mantém o essencial
+            context.user_data.clear()
+            context.user_data["personagem_logado"] = nick 
             
+            await update.message.reply_text(f"✅ Login OK! Bem-vindo, {nick}!")
+            
+            # Chama o menu principal explicitamente
+            await menu.menu_principal(update, context)
+        else:
+            await update.message.reply_text("❌ Senha incorreta.")
+            context.user_data.clear()
+
 async def sair_conta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text(
-        "🔓 Você saiu da conta.\n\nUse /start para fazer login novamente."
-    )
+    await update.message.reply_text("🔓 Você saiu da conta.\n\nUse /start para fazer login novamente.")
 
 --- ARQUIVO: .\handlers\menu.py ---
 from telegram import Update
 from telegram.ext import ContextTypes
-import database
-from handlers.viagem import exibir_mapa # Importamos a função que centraliza tudo
+import handlers.viagem as viagem
 
 async def menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. Verifica se o personagem está logado na sessão
+    # 1. Busca o nick na sessão
     nick = context.user_data.get("personagem_logado")
     
     if not nick:
-        # Se não houver sessão, manda para o início
-        print("DEBUG MENU: Nick não encontrado na sessão!")
-        if update.callback_query:
-            await update.callback_query.answer("Sessão expirada!", show_alert=True)
+        print("DEBUG MENU: Erro - personagem_logado não está no user_data")
         return
-
-    print("DEBUG MENU: Chamando exibir_mapa...")
-    await exibir_mapa(update, context, 0)
-    print("DEBUG MENU: exibir_mapa finalizado.")
-    
+    # O mapa 0 é a Vila Inicial
+    await viagem.exibir_mapa(update, context, 0)
 
 --- ARQUIVO: .\handlers\mochila.py ---
 # handlers/mochila.py
@@ -1253,67 +1993,104 @@ import database
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 
-# handlers/mochila.py
-
-import os
-import database
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
-from telegram.ext import ContextTypes
-
-
 async def ver_mochila(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
     user_id = query.from_user.id
-    itens = database.get_inventario(user_id)
+    pagina = int(query.data.split("_")[1]) if "_" in query.data and query.data.split("_")[1].isdigit() else 0
+
+    itens_brutos = database.get_inventario(user_id) 
     jogador = database.get_jogador(user_id)
     
-    texto_equipamentos = "⚔️ Equipamentos\n"
-    texto_consumiveis = "Itens e Consumíveis\n"
+    # BUSCA A LISTA MESTRE PARA FILTRAR O SUBTIPO 'ovo'
+    conn = database.conectar()
+    # Criamos um set de nomes que são ovos para filtrar rápido
+    cursor = conn.execute("SELECT nome FROM itens_mestre WHERE subtipo = 'ovo'")
+    nomes_ovos = {r['nome'] for r in cursor.fetchall()}
+    conn.close()
+
+    # FILTRAGEM: Remove ovos da visualização da mochila
+    equipamentos = [i for i in itens_brutos if i['tipo'] == 'equipamento']
+    outros_itens = [i for i in itens_brutos if i['tipo'] != 'equipamento' and i['item_nome'] not in nomes_ovos]
     
-    tem_equip = False
-    tem_cons = False
+    itens_por_pagina = 10
+    inicio = pagina * itens_por_pagina
+    fim = inicio + itens_por_pagina
+    equip_pagina = equipamentos[inicio:fim]
+
+    texto = f"🎒 Mochila\nSlots: {len(equipamentos)}/{jogador['mochila_slots']}\n\n"
     keyboard = []
-
-    if not itens:
-        texto_final = "🎒 Mochila\n\nSua mochila está vazia... 🕸️"
-    else:
-        for item in itens:
-            nome = item['item_nome']
-            qtd = item['quantidade']
-            tipo = item['tipo']
-
-            if tipo == 'equipamento':
-                tem_equip = True
-                texto_equipamentos += f"🔹 {nome}\n"
-            else:
-                tem_cons = True
-                texto_consumiveis += f"🔹 {nome} (x{qtd})\n"
-
-        texto_final = "🎒 Mochila\n\n"
-        if tem_equip:
-            texto_final += texto_equipamentos + "\n"
-        if tem_cons:
-            texto_final += texto_consumiveis
-
-    # Botão voltar dinâmico
-    mapa_atual = jogador['mapa_atual'] if jogador else 0
-    callback_volta = "menu_principal" if mapa_atual == 0 else f"ir_{mapa_atual}"
-    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data=callback_volta)])
+    if equip_pagina:
+        for item in equip_pagina:
+            refino = f" (+{item['nivel_refino']})" if item['nivel_refino'] > 0 else ""
+            status = "✅ " if item['equipado'] == 1 else ""
+            keyboard.append([InlineKeyboardButton(f"{status}{item['item_nome']}{refino}", callback_data=f"item_ver_{item['id']}")])
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    caminho_img = os.path.join("imagens", "capa.png")
+    if outros_itens and pagina == 0:
+        texto += "📦 Itens e Materiais:\n"
+        for i in outros_itens:
+            texto += f"• {i['item_nome']} (x{i['quantidade']})\n"
 
-    try:
-        with open(caminho_img, "rb") as foto:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=foto, caption=texto_final, parse_mode="Markdown"),
-                reply_markup=reply_markup
-            )
-    except FileNotFoundError:
-        await query.edit_message_caption(caption=texto_final, reply_markup=reply_markup, parse_mode="Markdown")
-        
+    nav = []
+    if pagina > 0: nav.append(InlineKeyboardButton("⬅️", callback_data=f"mochila_{pagina-1}"))
+    if fim < len(equipamentos): nav.append(InlineKeyboardButton("➡️", callback_data=f"mochila_{pagina+1}"))
+    if nav: keyboard.append(nav)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Voltar", callback_data="status")])
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def detalhes_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exibe os detalhes de um item específico selecionado na mochila."""
+    query = update.callback_query
+    await query.answer()
+    
+    item_id = query.data.replace("item_ver_", "")
+    
+    conn = database.conectar()
+    # Buscamos o item específico pelo ID único na mochila
+    item_inv = conn.execute("SELECT * FROM inventario WHERE id = ?", (item_id,)).fetchone()
+    # Buscamos as propriedades desse item na tabela mestre
+    item_mestre = conn.execute("SELECT * FROM itens_mestre WHERE nome = ?", (item_inv['item_nome'],)).fetchone()
+    conn.close()
+
+    if not item_inv:
+        await query.answer("Item não encontrado.")
+        return
+
+    # Cálculo do bônus real incluindo o refino (+2 por nível)
+    poder_extra = (item_inv['nivel_refino'] or 0) * 2 
+    total_bonus = item_mestre['valor_efeito'] + poder_extra
+    
+    refino_titulo = f" +{item_inv['nivel_refino']}" if item_inv['nivel_refino'] > 0 else ""
+
+    texto = (
+        f"🔍 {item_mestre['nome']}{refino_titulo}\n"
+        f"_{item_mestre['descricao']}_\n\n"
+        f"📊 Bônus Total: +{total_bonus}\n"
+        f"✨ (Bônus base: {item_mestre['valor_efeito']} | Forja: +{poder_extra})\n"
+    )
+
+    label_acao = "❌ Desequipar" if item_inv['equipado'] == 1 else "⚔️ Equipar"
+    
+    keyboard = [
+        [InlineKeyboardButton(label_acao, callback_data=f"item_acao_{item_id}")],
+        [InlineKeyboardButton("⬅️ Voltar", callback_data="mochila")]
+    ]
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def executar_acao_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processa a ação de equipar ou desequipar o item."""
+    query = update.callback_query
+    item_id = query.data.replace("item_acao_", "")
+    user_id = query.from_user.id
+
+    # Chama a função no banco de dados que faz a troca de equipamentos
+    sucesso, mensagem = database.equipar_desequipar_db(user_id, item_id)
+    
+    await query.answer(mensagem, show_alert=True)
+    
+    # Após equipar/desequipar, voltamos para a visualização da mochila
+    await ver_mochila(update, context)
 
 
 --- ARQUIVO: .\handlers\perfil.py ---
@@ -1335,7 +2112,7 @@ async def ver_perfil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     emoji = "♂️" if dados["genero"] == "masculino" else "♀️"
     
     mensagem = (
-        f"📜 PERFIL\n\n"
+        f"📜 Perfil\n\n"
         f"👤 Nick: {dados['nick']}\n"
         f"⚥ Gênero: {dados['genero'].capitalize()} {emoji}\n"
         f"❤️ Vida: {dados['vida']}/{dados['vida_max']}\n" 
@@ -1350,60 +2127,119 @@ async def ver_perfil(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 
 --- ARQUIVO: .\handlers\router.py ---
-# --- ARQUIVO: .\handlers\router.py ---
 import handlers.cadastro as cadastro
 import handlers.login as login
 import database
 import admin
+from modelos.monstros import buscar_modelo_pet 
 
+# COLOQUE SEU ID REAL AQUI
 ADMIN_ID = 5386405631  
 
 async def processar_texto(update, context):
     user_id = update.effective_user.id
     texto = update.message.text
-
-    # --- COMANDO DE ADMIN ---
     comando_limpo = texto.lower()
-    if (comando_limpo.startswith("dar ") or comando_limpo.startswith("/dar ")) and user_id == ADMIN_ID:
-        # ... (seu código de dar item continua igual)
-        pass 
 
-    # --- COMANDO ADMIN: /set_level ---
-    if (comando_limpo.startswith("set_level ") or comando_limpo.startswith("/set_level ")) and user_id == ADMIN_ID:
-        # Divide a mensagem: ['/set_level', 'nick_do_usuario', 'novo_nivel']
-        partes = texto.split()
+    # --- COMANDO ADMIN: /darpet [NICK] [NOME DO PET] ---
+    if comando_limpo.startswith(("/darpet ", "darpet ")) and user_id == ADMIN_ID:
+        print(f"DEBUG ADMIN: Tentando dar pet. Comando: {texto}")
         
+        partes = texto.split()
         if len(partes) < 3:
-            await update.message.reply_text("⚠️ Formato incorreto. Use: /set_level [NICK] [NIVEL]")
+            await update.message.reply_text("⚠️ Use: `/darpet [NICK] [NOME]`\nEx: `/darpet Recruta Lobo filhote`", parse_mode="Markdown")
+            return
+
+        nick_alvo = partes[1]
+        nome_pet = " ".join(partes[2:]) # Une o resto (ex: 'Lobo', 'filhote' -> 'Lobo filhote')
+        
+        # 1. Busca o modelo do pet nos monstros.py
+        pet_modelo = buscar_modelo_pet(nome_pet)
+        if not pet_modelo:
+            print(f"DEBUG ADMIN: Pet '{nome_pet}' não encontrado nos modelos.")
+            await update.message.reply_text(f"❌ O pet '{nome_pet}' não existe nos arquivos de modelos.")
+            return
+
+        # 2. Busca o jogador pelo Nick
+        jogador_alvo = database.buscar_personagem_por_nick(nick_alvo)
+        if not jogador_alvo:
+            print(f"DEBUG ADMIN: Jogador '{nick_alvo}' não encontrado no banco.")
+            await update.message.reply_text(f"❌ O jogador '{nick_alvo}' não foi encontrado.")
+            return
+
+        # 3. Entrega o pet
+        target_id = jogador_alvo['user_id']
+        database.adicionar_novo_pet(target_id, pet_modelo)
+        
+        print(f"DEBUG ADMIN: Pet {nome_pet} entregue para {nick_alvo} com sucesso!")
+        await update.message.reply_text(f"✅ Sucesso! *{nome_pet}* foi adicionado à coleção de *{nick_alvo}*!", parse_mode="Markdown")
+        return
+
+    # --- COMANDO ADMIN: /dar [NICK] [QTD] [RECURSO/ITEM] ---
+    if (comando_limpo.startswith("dar ") or comando_limpo.startswith("/dar ")) and user_id == ADMIN_ID:
+        partes = texto.split()
+        if len(partes) < 4:
+            await update.message.reply_text("⚠️ Use: `/dar [NICK] [QTD] [ITEM ou GOLD]`")
+            return
+
+        nick_alvo = partes[1]
+        try:
+            quantidade = int(partes[2])
+        except ValueError:
+            await update.message.reply_text("⚠️ A quantidade deve ser um número.")
+            return
+
+        nome_alvo = " ".join(partes[3:])
+        nome_alvo_lower = nome_alvo.lower()
+
+        # 1. Se for recurso financeiro
+        if nome_alvo_lower in ['gold', 'mithril']:
+            sucesso, msg = admin.dar_recurso_admin(nick_alvo, nome_alvo_lower, quantidade)
+            await update.message.reply_text(msg)
+        
+        # 2. Se for um item físico
+        else:
+            sucesso, msg = admin.dar_item_admin(nick_alvo, nome_alvo, quantidade)
+            if sucesso:
+                await update.message.reply_text(f"✅ Sucesso: {quantidade}x {nome_alvo} para {nick_alvo}.")
+            else:
+                await update.message.reply_text(f"❌ Erro: {msg}")
+        return
+    
+    # --- COMANDO ADMIN: /set_level [NICK] [NIVEL] ---
+    if comando_limpo.startswith(("/set_level", "set_level")):
+        if user_id != ADMIN_ID:
+            await update.message.reply_text("🚫 Acesso negado.")
+            return
+
+        partes = texto.split()
+        if len(partes) < 3:
+            await update.message.reply_text("⚠️ Use: `/set_level [NICK] [NIVEL]`")
             return
 
         nick_alvo = partes[1]
         try:
             nivel_novo = int(partes[2])
-            # Chama a função que importamos lá em cima no admin.py
+            # Chamada para a função no admin.py
             sucesso = admin.set_level_admin(nick_alvo, nivel_novo)
             
             if sucesso:
-                await update.message.reply_text(f"✅ Sucesso! O jogador {nick_alvo} agora está no Nível {nivel_novo}.")
+                await update.message.reply_text(f"✅ O jogador {nick_alvo} foi definido para o Nível {nivel_novo}!", parse_mode="Markdown")
             else:
-                await update.message.reply_text(f"❌ Erro: Jogador '{nick_alvo}' não encontrado.")
+                # Tenta buscar pelo nick exato (caso o usuário tenha digitado minúsculo)
+                await update.message.reply_text(f"❌ Jogador '{nick_alvo}' não encontrado. Verifique se o Nick está idêntico ao jogo (Maiúsculas/Minúsculas).")
         except ValueError:
             await update.message.reply_text("⚠️ O nível deve ser um número inteiro.")
         return
 
-    # --- LÓGICA DE LOGIN ---
+    # --- LÓGICA DE LOGIN E CADASTRO ---
     if context.user_data.get("login_etapa"):
-        print("DEBUG ROTEADOR: Identificado etapa de login, chamando login.processar_login")
         await login.processar_login(update, context)
         return
 
-    # --- LÓGICA DE CADASTRO ---
     if context.user_data.get("esperando_nick") or context.user_data.get("esperando_senha"):
-        print("DEBUG ROTEADOR: Identificado etapa de cadastro, chamando cadastro.processar_texto_cadastro")
         await cadastro.processar_texto_cadastro(update, context)
         return
-        
-    print("DEBUG ROTEADOR: Nenhuma etapa de login ou cadastro encontrada.")
 
 --- ARQUIVO: .\handlers\start.py ---
 # Comando /start e Menu principal
@@ -1416,10 +2252,12 @@ from telegram.ext import ContextTypes
 from modelos.monstros import sortear_pet
 from handlers.menu import menu_principal
 from handlers import viagem
+from datetime import datetime
 
 async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+    # Log de diagnóstico
     user_id = update.effective_user.id
+    print(f"DEBUG: Comando /start recebido do user {user_id}")
     
     database.resetar_localizacao(user_id)
     
@@ -1431,22 +2269,30 @@ async def inicio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-
     texto = "Bem-vindo ao Reino de Hunter 🏰\nSua jornada começa agora."
 
+    # IMPORTANTE: Verifique se a pasta se chama 'imagens' (minúsculo) no GitHub
     caminho_imagem = os.path.join("imagens", "capa.png")
 
     try:
-        with open(caminho_imagem, "rb") as foto:
-            await update.effective_chat.send_photo(
-                photo=foto,
-                caption=texto,
+        if os.path.exists(caminho_imagem):
+            with open(caminho_imagem, "rb") as foto:
+                await update.effective_chat.send_photo(
+                    photo=foto,
+                    caption=texto,
+                    reply_markup=reply_markup
+                )
+        else:
+            print(f"DEBUG: Arquivo não encontrado em {caminho_imagem}")
+            await update.effective_chat.send_message(
+                text=texto + "\n\n⚠️ (Imagem não encontrada no servidor)",
                 reply_markup=reply_markup
             )
 
-    except FileNotFoundError:
+    except Exception as e:
+        print(f"ERRO CRÍTICO NO START: {e}")
         await update.effective_chat.send_message(
-            texto + "\n\n⚠️ (Imagem não encontrada)",
+            text=f"Erro ao iniciar o bot: {e}",
             reply_markup=reply_markup
         )
 
@@ -1485,118 +2331,62 @@ async def resgatar_presente(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def chocar_ovo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
+    
+    from modelos.monstros import sortear_pet
     pet = sortear_pet() 
 
-    conn = database.conectar()
-    cursor = conn.cursor()
+    # Adiciona à nova tabela de pets
+    database.adicionar_novo_pet(user_id, pet)
     
-    # Organizei o SQL para ficar fácil de ler: 7 campos = 7 interrogações
-    cursor.execute("""
-        UPDATE personagens 
-        SET jogo_iniciado = 1, 
-            pet_nome = ?, 
-            pet_vida = ?, 
-            pet_ataque = ?, 
-            pet_defesa = ?, 
-            pet_agilidade = ?, 
-            pet_imagem = ?, 
-            mapa_atual = 0
-        WHERE user_id = ?
-    """, (
-        pet["nome"], 
-        pet["vida"], 
-        pet["ataque"], 
-        pet["defesa"], 
-        pet["agilidade"], 
-        pet["imagem"], 
-        user_id
-    ))
+    # Marca que o jogo iniciou na tabela principal
+    conn = database.conectar()
+    conn.execute("UPDATE personagens SET jogo_iniciado = 1 WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
     caminho_foto_pet = os.path.join('imagens', pet["imagem"])
-    
     texto_sucesso = (
         f"🎉 O OVO CHOCOU!\n\n"
-        f"🐾 Seu novo companheiro: {pet['nome']}\n"
-        f"⚔️ Status: Atk {pet['ataque']} | Def {pet['defesa']}\n\n"
-        f"Agora você pode explorar o universo de Hunter!"
+        f"🐾 Você obteve: {pet['nome']}\n"
+        f"Ele foi adicionado à sua coleção! Você pode gerenciar seus pets no menu Pet."
     )
 
     keyboard = [[InlineKeyboardButton("🏰 Menu Principal", callback_data="menu_principal")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
+    
     try:
         with open(caminho_foto_pet, 'rb') as foto:
             await query.edit_message_media(
                 media=InputMediaPhoto(media=foto, caption=texto_sucesso),
-                reply_markup=reply_markup
-            )
-    except FileNotFoundError:
-        await query.edit_message_caption(
-            caption=f"⚠️ (Imagem {pet['imagem']} não encontrada)\n\n{texto_sucesso}",
-            reply_markup=reply_markup
-        )
-
-    
-async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-    jogador_bruto = database.get_jogador(user_id) 
-    
-    if not jogador_bruto or not jogador_bruto["pet_nome"]:
-        await query.edit_message_caption("❌ Você ainda não tem um pet.")
-        return
-    
-    # Aplica o bônus
-    jogador = database.aplicar_bonus_pet(dict(jogador_bruto))
-
-    # Verifica quantas maçãs o jogador tem para o botão aparecer
-    itens = database.get_inventario(user_id)
-    qtd_maca = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
-
-    arquivo_imagem = jogador["pet_imagem"] if jogador["pet_imagem"] else "capa.png"
-    caminho_foto = os.path.join('imagens', arquivo_imagem)
-    
-    status_eq = "✅ Equipado" if jogador['pet_equipado'] == 1 else "❌ Desequipado"
-    label_eq = "Desequipar" if jogador['pet_equipado'] == 1 else "Equipar"
-
-    texto = (
-        f"🐾 Pet: {jogador['pet_nome']} (Lvl {jogador['pet_level']})\n"
-        f"Status: {status_eq}\n\n"
-        f"❤️ Vida Max: {jogador['vida_max']}\n"
-        f"⚔️ Ataque: {jogador['ataque']}\n"
-        f"🛡️ Defesa: {jogador['defesa']}\n\n"
-        f"🍎 Maçãs disponíveis: {qtd_maca}"
-    )
-
-    keyboard = [
-        [InlineKeyboardButton(f"{label_eq}", callback_data="equipar_pet")]
-    ]
-    
-    # Se tiver maçã, mostra o botão de alimentar
-    if qtd_maca > 0:
-        keyboard.append([InlineKeyboardButton(f"Alimentar", callback_data="alimentar_menu")])
-        
-    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
-    
-    try:
-        with open(caminho_foto, 'rb') as foto:
-            await query.edit_message_media(
-                media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
     except FileNotFoundError:
-        await query.edit_message_caption(
-            caption=f"⚠️ Imagem não encontrada\n\n{texto}", 
-            reply_markup=InlineKeyboardMarkup(keyboard), 
-            parse_mode="Markdown"
-        )
-        
+        await query.edit_message_caption(caption=texto_sucesso, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    
+async def pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Menu principal de Pets com botão para Incubadora."""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    pets = database.get_pets_jogador(user_id)
+    
+    texto = "🐾 Galeria de Pet\nGerencie seus companheiros ou choque novos ovos!\n"
+    keyboard = []
+    
+    # BOTÃO DA INCUBADORA (Sempre visível)
+    keyboard.append([InlineKeyboardButton("🥚 Incubadora", callback_data="abrir_incubadora")])
+    
+    if pets:
+        texto += "\nSua Coleção:\n"
+        for p in pets:
+            status = "✅" if p['equipado'] else "💤"
+            keyboard.append([InlineKeyboardButton(f"{status} {p['nome']} (Lvl {p['level']})", callback_data=f"ver_pet_{p['id']}")])
+    
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    
+
     
 async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1625,78 +2415,110 @@ async def voltar_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def login_diario(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
+    nick = context.user_data.get("personagem_logado")
 
-    # Recupera o personagem logado na sessão
-    nick = context.user_data.get("login_nick")
+    # 1. Lógica do Login Diário (Bônus de Ouro)
+    resgate_ok, msg_login = database.reivindicar_login_diario(nick) if nick else (False, "Faça login.")
+
+    # 2. Busca Missões Diárias
+    missoes = database.get_ou_criar_missoes(user_id)
     
-    if not nick:
-        # Se falhar, tentamos a outra chave só por segurança
-        nick = context.user_data.get("personagem_logado")
-
-    if not nick:
-        await query.edit_message_caption("❌ Você precisa estar logado para resgatar o bônus.")
-        return
-
-    # Chama a lógica do banco
-    sucesso, mensagem = database.reivindicar_login_diario(nick)
-
-    # Cria o botão de voltar
-    keyboard = [[InlineKeyboardButton("⬅ Voltar ao Menu", callback_data="menu_principal")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if sucesso:
-        await query.edit_message_caption(f"🎁 LOGIN DIÁRIO\n\n{mensagem}", reply_markup=reply_markup)
-    else:
-        # Se já resgatou, exibe a mensagem de aviso
-        await query.edit_message_caption(f"⏳ AVISO\n\n{mensagem}", reply_markup=reply_markup)
+    texto = f"🎁 Bônus diário\n{msg_login}\n\n"
+    texto += "📜 Missões de hoje\n"
+    
+    keyboard = []
+    
+    for m in missoes:
+        status = "✅" if m['reivindicada'] else "🎯"
+        # MAPEAMENTO DE NOMES
+        nomes = {
+            'caca': f"Caçar {m['objetivo']} monstros",
+            'gold': f"Ganhar {m['objetivo']} gold caçando",
+            'pocao': f"Usar {m['objetivo']} poções em luta",
+            'forja': f"Melhorar {m['objetivo']} item na Forja",
+            'venda': f"Vender {m['objetivo']} itens no Ateliê",
+            'alimentar': f"Dar {m['objetivo']} frutas ao Pet"
+        }
+        desc = nomes.get(m['tipo'], "Missão desconhecida")
         
+        texto += f"{status} {desc} ({m['progresso']}/{m['objetivo']})\n"
+        
+        # Se completou mas não reivindicou, mostra o botão
+        if m['progresso'] >= m['objetivo'] and not m['reivindicada']:
+            keyboard.append([InlineKeyboardButton(f"🎁 Resgatar {m['recompensa_gold']} Gold", callback_data=f"resgatar_missao_{m['tipo']}")])
+
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu_principal")])
+    
+    await query.edit_message_caption(
+        caption=texto, 
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+
+async def reivindicar_missao_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback para o botão de resgate da missão"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    tipo = query.data.replace("resgatar_missao_", "")
+    
+    sucesso, msg = database.reivindicar_missao_db(user_id, tipo)
+    await query.answer(msg, show_alert=True)
+    
+    # Atualiza a tela de login diário para mostrar o status novo
+    await login_diario(update, context)
+    
+
 
 async def alimentar_pet_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Mostra opções de quantidade baseada no estoque de maçãs"""
+    """Mostra opções de quantidade para o pet selecionado"""
     query = update.callback_query
     await query.answer()
     
+    # Extrai o pet_id do callback (ex: alimentar_menu_5)
+    pet_id = int(query.data.split("_")[2])
     user_id = query.from_user.id
+    
     itens = database.get_inventario(user_id)
-    qtd_total = sum(item['quantidade'] for item in itens if item['item_nome'] == "Maçã")
+    qtd_total = sum(item['quantidade'] for item in itens if item['item_nome'] == "Fruta arco-íris")
     
     if qtd_total == 0:
-        await query.answer("Você não tem maçãs!", show_alert=True)
+        await query.answer("Você não tem nenhuma fruta!", show_alert=True)
         return
 
-    # Monta botões baseados no que o jogador possui
     keyboard = []
+    # O callback agora leva o pet_id e a quantidade: exec_alim_{pet_id}_{qtd}
+    if qtd_total >= 1: keyboard.append([InlineKeyboardButton("🍎 1x Fruta arco-íris", callback_data=f"exec_alim_{pet_id}_1")])
+    if qtd_total >= 10: keyboard.append([InlineKeyboardButton("🍎 10x frutas arco-íris", callback_data=f"exec_alim_{pet_id}_10")])
+    if qtd_total > 1: keyboard.append([InlineKeyboardButton(f"🍎 Tudo ({qtd_total}x)", callback_data=f"exec_alim_{pet_id}_{qtd_total}")])
     
-    if qtd_total >= 1: keyboard.append([InlineKeyboardButton(" Alimentar com 1x", callback_data="exec_alim_1")])
-    if qtd_total >= 10: keyboard.append([InlineKeyboardButton(" Alimentar com 10x", callback_data="exec_alim_10")])
-    if qtd_total >= 20: keyboard.append([InlineKeyboardButton(" Alimentar com 20x", callback_data="exec_alim_20")])
-    if qtd_total > 1: keyboard.append([InlineKeyboardButton(f" Tudo ({qtd_total}x)", callback_data=f"exec_alim_{qtd_total}")])
-    
-    keyboard.append([InlineKeyboardButton("⬅ Voltar ao Pet", callback_data="pet")])
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data=f"ver_pet_{pet_id}")])
     
     await query.edit_message_caption(
-        caption=f"Menu de Alimentação\n\nVocê possui {qtd_total} maçãs. Escolha quanto dar ao seu pet:",
+        caption=f"Quantas frutas arco-íris deseja dar ao seu pet?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown"
     )
     
-    
 async def executar_alimentar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe a escolha de quantidade e executa no banco"""
+    """Executa a alimentação no pet específico"""
     query = update.callback_query
-    await query.answer()
     user_id = query.from_user.id
     
-    # Extrai o número do callback (exec_alim_X)
-    qtd = int(query.data.split("_")[2])
+    # Extrai dados: exec_alim_{pet_id}_{qtd}
+    partes = query.data.split("_")
+    pet_id = int(partes[2])
+    qtd = int(partes[3])
     
-    sucesso, mensagem = database.dar_xp_pet(user_id, "Maçã", 10, qtd)
+    sucesso, mensagem = database.dar_xp_pet(user_id, pet_id, "Fruta arco-íris", 10, qtd)
     
-    # Resultado visual
-    await query.answer(f"{'Sucesso!' if sucesso else 'Erro!'}")
+    await query.answer(mensagem, show_alert=True)
+    database.atualizar_progresso_missao(user_id, 'alimentar', qtd)
     
-    # Mostra mensagem e volta pro menu pet
-    await pet(update, context)
+    # Retorna para a tela de detalhes do pet para ver o progresso
+    # Criamos um objeto query "fake" para reaproveitar a função ver_detalhes_pet
+    query.data = f"ver_pet_{pet_id}"
+    await ver_detalhes_pet(update, context)
     
     
     
@@ -1717,6 +2539,216 @@ async def equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer("Equipamento atualizado!")
     # Recarrega a tela do pet
     await pet(update, context)
+    
+    
+async def ver_detalhes_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exibe detalhes do pet com alternância real entre Equipar/Desequipar"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Extração do ID
+    pet_id = int(query.data.split("_")[2])
+    pet_db = database.get_pet_por_id(pet_id)
+    user_id = query.from_user.id
+    
+    if not pet_db:
+        await query.edit_message_caption("❌ Pet não encontrado.")
+        return
+
+    # Busca descrição do bônus
+    from modelos.monstros import buscar_modelo_pet
+    modelo = buscar_modelo_pet(pet_db['nome'])
+    desc_bonus = modelo.get('bonus', "Bônus não configurado.")
+
+    # SEGURANÇA: Convertemos para int para garantir a comparação (1 ou 0)
+    esta_equipado = int(pet_db['equipado']) == 1
+    status_texto = "✅ EQUIPADO" if esta_equipado else "💤"
+    
+    texto = (
+        f"🐾 Detalhes\n\n"
+        f"Nome: {pet_db['nome']}\n"
+        f"Nível: {pet_db['level']}\n"
+        f"Status: {status_texto}\n\n"
+        f"✨ Habilidade: \n{desc_bonus}\n\n"
+        f"📊 Status: \n❤️ {pet_db['vida']} | ⚔️ {pet_db['ataque']} | 🛡️ {pet_db['defesa']}"
+    )
+
+    keyboard = []
+    
+    # LÓGICA DO BOTÃO DINÂMICO
+    if esta_equipado:
+        # Se está equipado, mostra apenas o botão de DESEQUIPAR
+        keyboard.append([InlineKeyboardButton("❌ Desequipar Pet", callback_data=f"desequipar_pet_{pet_id}")])
+    else:
+        # Se NÃO está equipado, mostra o botão de EQUIPAR
+        keyboard.append([InlineKeyboardButton("⚔️ Equipar este Pet", callback_data=f"equipar_pet_{pet_id}")])
+
+    # Botão de alimentação (sempre visível se houver maçãs)
+    itens = database.get_inventario(user_id)
+    qtd_maca = sum(item['quantidade'] for item in itens if item['item_nome'] == "Fruta arco-íris")
+    if qtd_maca > 0:
+        keyboard.append([InlineKeyboardButton(f"🍎 Alimentar ({qtd_maca})", callback_data=f"alimentar_menu_{pet_id}")])
+        
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="pet")])
+    
+    caminho_foto = os.path.join('imagens', pet_db['imagem'])
+    
+    try:
+        with open(caminho_foto, 'rb') as foto:
+            await query.edit_message_media(
+                media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except FileNotFoundError:
+        await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+
+async def executar_equipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processa a troca de pet ativo"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    pet_id = int(query.data.split("_")[2])
+    
+    # Chama a função do banco que criamos no passo anterior
+    database.equipar_pet_db(user_id, pet_id)
+    
+    await query.answer("🐾 Pet equipado com sucesso!", show_alert=True)
+    
+    # Volta para os detalhes do pet atualizado
+    await ver_detalhes_pet(update, context)
+    
+
+async def executar_desequipar_pet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Executa a remoção do pet ativo"""
+    query = update.callback_query
+    user_id = query.from_user.id
+    pet_id = int(query.data.split("_")[2]) # Pegamos o ID apenas para recarregar a tela depois
+    
+    # Chama a função do banco
+    database.desequipar_pet_completo_db(user_id)
+    
+    await query.answer("Desequipado", show_alert=True)
+    
+    # Recarrega a tela de detalhes para mostrar que agora o status mudou
+    await ver_detalhes_pet(update, context)
+    
+    
+async def abrir_incubadora(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    MAX_SLOTS = 3 
+    processos = database.get_incubacoes_ativas(user_id)
+    ovos_estoque = database.get_ovos_jogador(user_id)
+    
+    texto = f"🌡️ Central de Incubação ({len(processos)}/{MAX_SLOTS})\n\n"
+    keyboard = []
+
+    # OVOS CHOCANDO
+    if processos:
+        for p in processos:
+            tempo_final = datetime.strptime(p['tempo_final'], "%Y-%m-%d %H:%M:%S")
+            agora = datetime.now()
+            
+            if agora >= tempo_final:
+                texto += f"✅ {p['ovo_nome']} pronto!\n"
+                keyboard.append([InlineKeyboardButton(f"🐣 Reivindicar {p['ovo_nome']}", callback_data=f"finalizar_chocar_{p['id']}")])
+            else:
+                restante = tempo_final - agora
+                texto += f"⏳ {p['ovo_nome']}: `{restante.seconds // 3600:02}h` restantes\n"
+        keyboard.append([InlineKeyboardButton("🔄 Atualizar", callback_data="abrir_incubadora")])
+    else:
+        texto += "❄️ Nenhuma incubação ativa.\n"
+
+    # ESTOQUE
+    texto += "\n📦 Seus Ovos:\n"
+    if not ovos_estoque:
+        texto += "_Vazio._"
+    else:
+        for o in ovos_estoque:
+            # Exibe o nome completo: Ovo [Região 1]
+            texto += f"• {o['item_nome']} (x{o['quantidade']})\n"
+            if len(processos) < MAX_SLOTS:
+                keyboard.append([InlineKeyboardButton(f"🔥 Chocar {o['item_nome']}", callback_data=f"chocar_selecionado_{o['id']}")])
+
+    keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="pet")])
+    await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+
+
+
+async def chocar_ovo_selecionado(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inicia o processo de chocar com base na raridade."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    inv_id = int(query.data.split("_")[2])
+    
+    conn = database.conectar()
+    ovo = conn.execute("SELECT item_nome FROM inventario WHERE id = ? AND user_id = ?", (inv_id, user_id)).fetchone()
+    if not ovo:
+        conn.close()
+        return
+
+    nome_ovo = ovo['item_nome']
+    
+    # DEFINIÇÃO DE TEMPOS (REGRAS DO MESTRE)
+    tempos = {
+        "Ovo Comum": 6,
+        "Ovo Incomum": 12,
+        "Ovo Raro": 18,
+        "Ovo Lendário": 24
+    }
+    horas_necessarias = tempos.get(nome_ovo, 6)
+
+    # 1. Consome o ovo da mochila
+    conn.execute("UPDATE inventario SET quantidade = quantidade - 1 WHERE id = ?", (inv_id,))
+    conn.execute("DELETE FROM inventario WHERE id = ? AND quantidade <= 0", (inv_id,))
+    conn.commit()
+    conn.close()
+
+    # 2. Inicia o timer no banco
+    database.iniciar_incubacao_db(user_id, nome_ovo, horas_necessarias)
+    
+    await query.answer(f"O {nome_ovo} foi colocado na incubadora! 🌡️", show_alert=True)
+    await abrir_incubadora(update, context)
+    
+
+async def finalizar_chocar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+    incubacao_id = int(query.data.split("_")[2])
+    
+    conn = database.conectar()
+    res = conn.execute("SELECT ovo_nome FROM incubacao_ativa WHERE id = ?", (incubacao_id,)).fetchone()
+    conn.close()
+    
+    if not res: return
+
+    nome_do_ovo = res['ovo_nome']
+    mapa_id = 0
+    # Extrai o número de: Ovo [Região 3]
+    if "Região " in nome_do_ovo:
+        try:
+            mapa_id = int(nome_do_ovo.split("Região ")[1].replace("]", ""))
+        except: mapa_id = 0
+
+    from modelos.monstros import sortear_pet
+    pet_ganho = sortear_pet(mapa_id)
+    database.adicionar_novo_pet(user_id, pet_ganho)
+    database.remover_incubacao_por_id(incubacao_id)
+    
+    await query.answer(f"Nasceu um {pet_ganho['nome']}!")
+    
+    texto = f"🎉 O OVO CHOCOU!\n\n🐾 Você obteve: {pet_ganho['nome']}\n✨ Bônus: _{pet_ganho['bonus']}_"
+    keyboard = [[InlineKeyboardButton(" Voltar", callback_data="abrir_incubadora")]]
+    
+    caminho_foto = os.path.join('imagens', pet_ganho['imagem'])
+    try:
+        with open(caminho_foto, 'rb') as foto:
+            await query.edit_message_media(media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"), reply_markup=InlineKeyboardMarkup(keyboard))
+    except:
+        await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 --- ARQUIVO: .\handlers\status.py ---
 #Status do player
@@ -1726,7 +2758,6 @@ import database
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 
-# --- ARQUIVO: .\handlers\status.py ---
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1737,8 +2768,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # BUSCA O JOGADOR E APLICA O BÔNUS AQUI
     jogador_bruto = database.get_jogador(user_id)
-    jogador = database.aplicar_bonus_pet(dict(jogador_bruto)) # APLICA BÔNUS!
-    print(f"DEBUG STATUS: Vida Max após bônus: {jogador['vida_max']}")
+    jogador = database.aplicar_bonus_geral(dict(jogador_bruto)) # APLICA BÔNUS!
 
     if not jogador:
         await query.edit_message_caption(caption="❌ Erro: Personagem não encontrado.")
@@ -1752,13 +2782,15 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Texto formatado com os valores JÁ COM BÔNUS
     texto_status = (
-        f"📊 STATUS\n\n"
+        f"📊 Status\n\n"
         f"👤 Nick: {jogador['nick']}\n"
         f"📈 Nível: {jogador['level']}\n"
         f"🧪 XP: {jogador['xp']}/{xp_prox_lvl}\n"
         f"❤️ Vida: {jogador['vida_max']} \n" 
         f"⚔️ Ataque: {jogador['ataque']}\n"
         f"🛡️ Defesa: {jogador['defesa']}\n"
+        f"🍀 Sorte: {jogador['sorte']}\n"
+        f"🎯 Crítico: {jogador['critico']}\n"
         f"💰 Gold: {jogador['gold']}\n"
         f"💎 Mithril: {jogador['mithril']}\n"
     )
@@ -1835,7 +2867,7 @@ async def mostrar_mapas(update, context: ContextTypes.DEFAULT_TYPE):
     keyboard.append([InlineKeyboardButton("⬅ Voltar", callback_data="menu")])
     
     texto = (
-        "🗺 SISTEMA DE VIAGEM\n\n"
+        "🗺 Sistema de viajem\n\n"
         f"Lvl: ⭐ Lvl {lvl_atual}\n"
         "Selecione um destino abaixo:"
     )
@@ -1868,62 +2900,79 @@ async def manter_local(update, context: ContextTypes.DEFAULT_TYPE):
         show_alert=False
     )
     
+# --- ARQUIVO: .\handlers\viagem.py ---
+
 async def exibir_mapa(update, context, mapa_id):
+    """Exibe a interface do mapa. Mapa 0 = Vila (Serviços), Mapa > 0 = Caça."""
     user_id = update.effective_user.id 
     query = getattr(update, "callback_query", None)
     
-    print(f"DEBUG VIAGEM: Entrando em exibir_mapa. ID: {mapa_id}")
+    # Garantimos que o ID seja um número inteiro para a comparação funcionar
+    mapa_id = int(mapa_id)
     
+    # 1. Atualizações de Estado
     database.curar_personagem_total(user_id)
     database.atualizar_mapa_personagem(user_id, mapa_id)
-    jogador = database.get_jogador(user_id)
-
-    if not jogador:
-        return
-
-    mapa_info = next((m for m in lista_mapas if m["id"] == mapa_id), None)
-    if not mapa_info:
-        return
-
-    nome_mapa = mapa_info.get('nome', 'Área Desconhecida')
-    imagem_nome = mapa_info.get('imagem', 'capa.png')
-    caminho_img = os.path.join("imagens", imagem_nome)
-
-    keyboard = []
     
-    # 1. Botões de Ação do Mapa (Diferenciam a Vila de Áreas de Caça)
+    jogador = database.get_jogador(user_id)
+    if not jogador: return
+
+    # 2. Busca informações do modelo do mapa
+    mapa_info = next((m for m in lista_mapas if m["id"] == mapa_id), None)
+    if not mapa_info: return
+
+    caminho_img = os.path.join("imagens", mapa_info.get('imagem', 'capa.png'))
+    keyboard = []
+
+    # --- LÓGICA DE RAMIFICAÇÃO DA UI ---
+    
     if mapa_id == 0:
-        texto = f"🏰 MENU PRINCIPAL\n\n👤 {jogador['nick']}\n📍 Localização: {nome_mapa}"
+        # INTERFACE DA VILA (Apenas aqui tem Ateliê e Login Diário)
+        texto = (
+            f"🏰 *{mapa_info['nome']}*\n"
+            f"_{mapa_info['descricao']}_\n\n"
+            f"👤 Caçador: {jogador['nick']}\n"
+            f"💰 Gold: {jogador['gold']}\n"
+            f"🐾 Pet: {jogador['pet_nome'] if jogador['pet_equipado'] else 'Nenhum'}"
+        )
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
+        keyboard.append([InlineKeyboardButton("🛠️ Ateliê", callback_data="atelie_menu")])
         keyboard.append([InlineKeyboardButton("🎁 Login Diário", callback_data="login_diario")])
+    
     else:
-        texto = f"📍 {mapa_info.get('descricao', 'Um lugar perigoso...')}\n\nVocê está em: {nome_mapa}"
+        # INTERFACE DE CAÇA (Mapas 1 a 8)
+        texto = (
+            f"📍 {mapa_info['nome']}\n"
+            f"_{mapa_info['descricao']}_\n\n"
+            "O que deseja fazer nesta área?"
+        )
         keyboard.append([InlineKeyboardButton("⚔️ Caçar", callback_data=f"procurar_{mapa_id}")])
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
-    
-    # 2. Botões Utilitários (Corrigido o acesso ao 'pet_nome')
+
+    # Botões utilitários (Aparecem em todos os mapas)
     botoes_utilitarios = [InlineKeyboardButton("📊 Status", callback_data="status")]
-    
-    # ACESSO CORRIGIDO: sqlite3.Row usa [] e não .get()
-    if jogador['pet_nome']:
+    if database.jogador_possui_pets(user_id):
         botoes_utilitarios.append(InlineKeyboardButton("🐾 Pet", callback_data="pet"))
-    
     keyboard.append(botoes_utilitarios)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     try:
-        with open(caminho_img, "rb") as foto:
-            if query:
-                await query.answer()
-                await query.edit_message_media(media=InputMediaPhoto(media=foto, caption=texto), reply_markup=reply_markup)
-            else:
-                await update.message.reply_photo(photo=foto, caption=texto, reply_markup=reply_markup)
-    except FileNotFoundError:
         if query:
-            await query.edit_message_caption(caption=texto, reply_markup=reply_markup)
+            await query.answer()
+            with open(caminho_img, "rb") as foto:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=foto, caption=texto, parse_mode="Markdown"), 
+                    reply_markup=reply_markup
+                )
         else:
-            await update.message.reply_text(text=texto, reply_markup=reply_markup)
+            with open(caminho_img, "rb") as foto:
+                await update.message.reply_photo(photo=foto, caption=texto, reply_markup=reply_markup, parse_mode="Markdown")
+    except FileNotFoundError:
+        # Fallback caso a imagem falhe
+        msg = f"{texto}\n\n⚠️ (Imagem não encontrada)"
+        if query: await query.edit_message_caption(caption=msg, reply_markup=reply_markup, parse_mode="Markdown")
+        else: await update.message.reply_text(text=msg, reply_markup=reply_markup, parse_mode="Markdown")            
             
         
 async def entrar_no_mapa(update, context: ContextTypes.DEFAULT_TYPE):
@@ -1952,142 +3001,234 @@ async def entrar_no_mapa(update, context: ContextTypes.DEFAULT_TYPE):
 # Formato: (Nome, Mapa_ID, Vida, Ataque, Defesa, XP, Gold, Imagem)
 LISTA_MONSTROS_MESTRE = [
     # MAPA 1: Acampamento do Pioneiro (Lvl 1)
-    ('Borboleta', 1, 25, 5, 1, 12, 8, 'borboleta.png'),
-    ('Centopéia', 1, 26, 6, 2, 15, 10, 'centopeia.png'),
+    ('Borboleta', 1, 25, 10, 1, 12, 8, 'borboleta.png'),
+    ('Centopéia', 1, 26, 6, 10, 15, 10, 'centopeia.png'),
     ('Grilo', 1, 27, 4, 1, 10, 5, 'grilo.png'),
-    ('Barata', 1, 28, 7, 2, 18, 12, 'barata.png'),
-    ('Aranha', 1, 30, 9, 3, 25, 20, 'aranha.png'),
+    ('Barata', 1, 28, 7, 2, 10, 12, 'barata.png'),
+    ('Aranha', 1, 30, 9, 3, 12, 20, 'aranha.png'),
 
     # MAPA 2: Bosque Queimado (Lvl 4)
-    ('Cinzelha', 2, 60, 15, 5, 40, 30, 'cinzelha.jpg'),
-    ('Lobo Calcinado', 2, 80, 18, 6, 50, 40, 'lobo_calcinado.jpg'),
-    ('Tronco Fumegante', 2, 100, 12, 10, 55, 45, 'tronco.jpg'),
-    ('Mariposa de Fuligem', 2, 55, 22, 3, 45, 35, 'mariposa.jpg'),
-    ('Serpe Braseira', 2, 120, 25, 8, 70, 60, 'naja.jpg'),
+    ('Cinzelha', 2, 35, 10, 4, 30, 25, 'cinzelha.jpg'),
+    ('Lobo Calcinado', 2, 36, 11, 4, 32, 28, 'lobo_calcinado.jpg'),
+    ('Tronco Fumegante', 2, 37, 12, 5, 35, 30, 'tronco.jpg'),
+    ('Mariposa de Fuligem', 2, 38, 13, 5, 38, 32, 'mariposa.jpg'),
+    ('Serpe Braseira', 2, 40, 15, 6, 45, 40, 'naja.jpg'),
 
     # MAPA 3: Ponte dos Suspiros (Lvl 6)
-    ('Eco Perdido', 3, 110, 30, 10, 85, 70, 'eco_perdido.png'),
-    ('Gárgula Rachada', 3, 160, 25, 15, 100, 80, 'gargula.png'),
-    ('Vulto do Abismo', 3, 100, 40, 5, 110, 90, 'vulto.png'),
-    ('Corvo de Musgo', 3, 90, 35, 8, 80, 65, 'corvo.png'),
-    ('Guardião da Ponte', 3, 250, 45, 20, 180, 150, 'guardiao_ponte.png'),
+    ('Eco Perdido', 3, 45, 18, 8, 55, 50, 'eco.jpg'),
+    ('Gárgula Rachada', 3, 46, 19, 9, 58, 52, 'gargula.jpg'),
+    ('Vulto do Abismo', 3, 47, 20, 9, 62, 55, 'vulto.jpg'),
+    ('Corvo de Musgo', 3, 48, 21, 10, 65, 58, 'corvo.jpg'),
+    ('Guardião da Ponte', 3, 50, 23, 12, 75, 65, 'guardiao.jpg'),
 
     # MAPA 4: Tumba do Caçador Ancião (Lvl 8)
-    ('Esqueleto Arqueiro', 4, 150, 50, 15, 150, 120, 'arqueiro.png'),
-    ('Cão Espectral', 4, 180, 55, 12, 170, 140, 'cao_espectral.png'),
-    ('Estátua Animada', 4, 300, 40, 30, 200, 160, 'estatua.png'),
-    ('Caçador Penitente', 4, 220, 65, 18, 250, 200, 'cacador_penitente.png'),
-    ('Rei Caçador Ancião', 4, 500, 80, 40, 500, 400, 'rei_anciao.png'),
+    ('Esqueleto Arqueiro', 4, 55, 26, 14, 85, 75, 'esqueleto.jpg'),
+    ('Cão Espectral', 4, 56, 27, 15, 88, 78, 'cao.jpg'),
+    ('Estátua Animada', 4, 57, 28, 16, 92, 82, 'estatua.jpg'),
+    ('Caçador Penitente', 4, 58, 29, 17, 95, 85, 'cacador.jpg'),
+    ('Rei Caçador Ancião', 4, 60, 32, 20, 110, 100, 'espirito.jpg'),
 
     # MAPA 5: Cachoeira da Serenidade (Lvl 10)
-    ('Ninfa d’Água', 5, 280, 75, 25, 350, 300, 'ninfa.png'),
-    ('Carpa Cristalina', 5, 200, 60, 40, 300, 250, 'carpa.png'),
-    ('Limo Vivo', 5, 400, 50, 50, 380, 320, 'limo.png'),
-    ('Libélula de Orvalho', 5, 250, 90, 20, 400, 350, 'libelula.png'),
-    ('Elemental do Lago', 5, 650, 110, 60, 700, 600, 'elemental_lago.png'),
+    ('Ninfa da Água', 5, 65, 35, 22, 130, 115, 'ninfa.jpg'),
+    ('Carpa Cristalina', 5, 66, 36, 23, 135, 118, 'carpa.jpg'),
+    ('Limo Vivo', 5, 67, 37, 24, 140, 122, 'limo.jpg'),
+    ('Libélula Carnívora', 5, 68, 38, 25, 145, 125, 'libelula.jpg'),
+    ('Elemental do Lago', 5, 75, 42, 28, 170, 150, 'elemental.jpg'),
 
     # MAPA 6: Desfiladeiro do Eco (Lvl 12)
-    ('Morcego Sônico', 6, 450, 130, 40, 800, 700, 'morcego.png'),
-    ('Golem de Sedimento', 6, 850, 100, 100, 950, 850, 'golem_sedimento.png'),
-    ('Cabrito Rupestre', 6, 500, 140, 50, 850, 750, 'cabrito.png'),
-    ('Víbora de Quartzo', 6, 600, 160, 60, 1000, 900, 'vibora.png'),
-    ('Roc dos Picos', 6, 1200, 200, 80, 1500, 1200, 'roc.png'),
+    ('Morcego Sônico', 6, 80, 45, 30, 200, 180, 'morcego.png'),
+    ('Golem de Sedimento', 6, 82, 46, 35, 210, 190, 'golem.png'),
+    ('Cabrito Rupestre', 6, 84, 47, 32, 220, 200, 'cabrito.png'),
+    ('Víbora de Quartzo', 6, 86, 48, 33, 230, 210, 'vibora.png'),
+    ('Águia de Mica', 6, 95, 55, 38, 280, 250, 'aguia.png'),
 
     # MAPA 7: Pico do Observador (Lvl 14)
-    ('Coruja Astral', 7, 800, 220, 70, 1800, 1500, 'coruja_astral.png'),
-    ('Autômato de Bronze', 7, 1500, 180, 150, 2200, 1800, 'automato.png'),
-    ('Lobo do Gelo Eterno', 7, 1200, 250, 100, 2000, 1700, 'lobo_gelo.png'),
-    ('Fragmento de Cometa', 7, 900, 300, 80, 2500, 2000, 'cometa.png'),
-    ('Oráculo Congelado', 7, 2000, 350, 120, 4000, 3500, 'oraculo.png'),
+    ('Coruja Astral', 7, 105, 60, 40, 350, 300, 'coruja.png'),
+    ('Autômato de Bronze', 7, 108, 62, 45, 370, 320, 'automato.png'),
+    ('Lobo do Gelo Eterno', 7, 110, 64, 42, 400, 350, 'lobo.png'),
+    ('Fragmento de Cometa', 7, 115, 68, 44, 450, 380, 'fragmento.png'),
+    ('Oráculo Congelado', 7, 130, 75, 50, 550, 500, 'oraculo.png'),
 
     # MAPA 8: Portal das Montanhas Brancas (Lvl 16)
-    ('Sentinela Rúnica', 8, 2500, 400, 200, 5500, 4500, 'sentinela.png'),
-    ('Serpente de Aurora', 8, 2200, 500, 150, 6000, 5000, 'serpente_aurora.png'),
-    ('Eco do Pioneiro', 8, 3000, 450, 250, 7000, 6000, 'eco_pioneiro.png'),
-    ('Golem do Portal', 8, 5000, 350, 400, 8500, 7500, 'golem_portal.png'),
-    ('Guardião das Montanhas Brancas', 8, 8000, 600, 500, 15000, 12000, 'guardiao_montanhas.png'),
+    ('Sentinela Rúnica', 8, 145, 85, 55, 700, 600, 'sentinela.png'),
+    ('Serpente de Aurora', 8, 150, 90, 60, 750, 650, 'serpente_aurora.png'),
+    ('Eco do Pioneiro', 8, 155, 95, 65, 800, 700, 'eco_pioneiro.png'),
+    ('Golem do Portal', 8, 160, 100, 80, 900, 800, 'golem_portal.png'),
+    ('Guardião das Montanhas Brancas', 8, 200, 130, 100, 1000, 1000, 'guardiao_montanhas.png'),
 ]
 
 
 # Itens que podem cair em cada mapa. 
 # Formato: (Mapa_ID, Item_Nome, Chance_Global)
 # A chance global é a probabilidade de cair QUALQUER item ao matar um monstro.
+
 LISTA_DROPS_MAPAS = [
     # Drops Mapas Iniciais (1 e 2)
-    (1, 'Maçã', 20),
+    (1, 'Fruta Arco-íris', 60),
     (1, 'Poção Pequena', 15),
-    (1, 'Osso Antigo', 10),
+    (1, 'Carapaça Resistente', 50),
+    (1, 'Essência Mágica', 10),
+    (1, 'Mithril', 1),
 
+    (2, 'Fruta Arco-íris', 60),
     (2, 'Poção Pequena', 20),
-    (2, 'Maçã', 15),
-    (2, 'Osso Antigo', 20),
-    (2, 'Essência Mágica', 5),
+    (2, 'Osso Carbonizado', 20),
+    (2, 'Essência Mágica', 10),
+    (2, 'Mithril', 1),
 
     # Drops Mapas Intermediários (3, 4 e 5)
-    (3, 'Poção Média', 15),
+    (3, 'Fruta Arco-íris', 60),
+    (3, 'Poção Pequena', 20),
     (3, 'Essência Mágica', 10),
-    (3, 'Osso Antigo', 20),
+    (3, 'Pedra Afiada', 20),
+    (3, 'Mithril', 1),
 
+    (4, 'Fruta Arco-íris', 60),
     (4, 'Poção Média', 20),
     (4, 'Essência Mágica', 15),
-    (4, 'Espada de Madeira', 2), # Raridade!
-
+    (4, 'Lamina Antiga', 20),
+    (4, 'Mithril', 1),
+    
+    (5, 'Fruta Arco-íris', 60),
     (5, 'Poção Média', 25),
     (5, 'Poção Grande', 5),
     (5, 'Essência Mágica', 20),
+    (5, 'Lagrima Elemental', 20),
+    (5, 'Mithril', 1),
 
     # Drops Mapas Avançados (6, 7 e 8)
+    (6, 'Fruta Arco-íris', 60),
     (6, 'Poção Grande', 15),
-    (6, 'Pena de Wyvern', 10),
     (6, 'Essência Mágica', 25),
+    (6, 'Fragmento de Cristal', 25),
+    (6, 'Mithril', 1),
 
+    (7, 'Fruta Arco-íris', 60),
     (7, 'Poção Grande', 20),
-    (7, 'Pena de Wyvern', 15),
-    (7, 'Armadura de Couro', 2), # Raro!
-
+    (7, 'Estalactite', 20),
+    (7, 'Mithril', 1),
+    
+    (8, 'Fruta Arco-íris', 60),
     (8, 'Poção Grande', 30),
-    (8, 'Pena de Wyvern', 25),
     (8, 'Essência Mágica', 30),
+    (8, 'Runa Antiga', 20),
+    (8, 'Mithril', 1),
 ]
 
 --- ARQUIVO: .\modelos\itens.py ---
 
 # --- ARQUIVO: .\modelos\itens.py ---
 
-# Formato: (Nome, Tipo, Subtipo, Valor_Efeito, Descrição, Preço_Gold)
+# Formato: (Nome, Tipo, Subtipo, Valor_Efeito, Descrição, Preço_Gold, Chance_drop, Nivel_max)
 LISTA_ITENS_MESTRE = [
     # CONSUMÍVEIS (Cura e Pet)
-    ('Poção Pequena', 'consumivel', 'cura', 20, 'Recupera 20% da vida.', 50),
-    ('Poção Média', 'consumivel', 'cura', 50, 'Recupera 50% da vida.', 150),
-    ('Poção Grande', 'consumivel', 'cura', 85, 'Recupera 85% da vida.', 300),
-    ('Maçã', 'consumivel', 'pet', 10, 'Dá XP ao seu pet.', 20),
+    ('Poção Pequena', 'consumivel', 'cura', 20, 'Recupera 20% da vida.', 50, 20, 0),
+    ('Poção Média', 'consumivel', 'cura', 50, 'Recupera 50% da vida.', 150, 15, 0),
+    ('Poção Grande', 'consumivel', 'cura', 85, 'Recupera 85% da vida.', 300, 8, 0),
+    ('Fruta arco-íris', 'consumivel', 'pet', 5, 'Dá XP ao seu pet.', 20, 65, 0),
     
     # EQUIPAMENTOS (Armas e Armaduras)
-    ('Espada de Madeira', 'equipamento', 'arma', 5, 'Uma espada simples (+5 Atq).', 100),
-    ('Armadura de Couro', 'equipamento', 'armadura', 3, 'Proteção básica (+3 Def).', 120),
-    ('Facão', 'equipamento', 'arma', 10, 'Uma lâmina de corte pesado (+10 Atq).', 200),
+    ('Facão', 'equipamento', 'arma', 5, 'Uma lâmina de corte pesado (+5 Atq).', 200, 0, 5),
+    ('Set mapa 1', 'equipamento', 'conjunto', 20, 'Bonus de 20 pts nos status base', 500, 0, 5),
+    ('Bússola', 'equipamento', 'conjunto', 1, 'Te ajuda a encontrar coisas valiosas', 300, 1, 5),
+    ('Binóculos', 'equipamento', 'conjunto', 1, 'Melhora tua visão e a chance de crítico', 300, 1, 5),
     
     # MATERIAIS E DROPS (Para venda ou quests futuras)
-    ('Osso Antigo', 'material', 'venda', 0, 'Um osso velho que pode ser vendido.', 15),
-    ('Essência Mágica', 'material', 'venda', 0, 'Fragmento de energia pura.', 50),
-    ('Pena de Wyvern', 'material', 'venda', 0, 'Uma pena rígida e valiosa.', 100),
+    ('Osso Antigo', 'material', 'venda', 0, 'Um osso velho.', 15, 50, 0),
+    ('Essência Mágica', 'material', 'venda', 0, 'Fragmento de energia pura.', 50, 40, 0),
+    ('Mithril', 'material', 'venda', 0, 'Uma pena rígida e valiosa.', 100, 1, 0),
+    ('Erva medicinal', 'material', 'venda', 0, 'Pode ser usada para fabricar poção de cura.', 100, 20, 0),
+    
+    # OVOS DE PETS (Nomes amigáveis e funcionais)
+    ('Ovo', 'consumivel', 'ovo', 0, 'Um ovo misterioso.', 500, 0, 0),
+    ('Ovo [Vila]', 'consumivel', 'ovo', 0, 'Um ovo encontrado na vila.', 500, 0, 0),
+    ('Ovo [Região 1]', 'consumivel', 'ovo', 0, 'Um ovo da região 1.', 0, 0, 0),
+    ('Ovo [Região 2]', 'consumivel', 'ovo', 0, 'Um ovo da região 2.', 0, 0, 0),
+    ('Ovo [Região 3]', 'consumivel', 'ovo', 0, 'Um ovo da região 3.', 0, 0, 0),
+    ('Ovo [Região 4]', 'consumivel', 'ovo', 0, 'Um ovo da região 4.', 0, 0, 0),
+    ('Ovo [Região 5]', 'consumivel', 'ovo', 0, 'Um ovo da região 5.', 0, 0, 0),
+    ('Ovo [Região 6]', 'consumivel', 'ovo', 0, 'Um ovo da região 6.', 0, 0, 0),
+    ('Ovo [Região 7]', 'consumivel', 'ovo', 0, 'Um ovo da região 7.', 0, 0, 0),
+    ('Ovo [Região 8]', 'consumivel', 'ovo', 0, 'Um ovo da região 8.', 0, 0, 0),
 ]
+
+def buscar_dados_item(nome_item):
+    """Procura o item na lista mestre e retorna seus dados (especialmente o tipo)"""
+    from modelos.itens import LISTA_ITENS_MESTRE
+    for item in LISTA_ITENS_MESTRE:
+        # item[0] é o Nome, item[1] é o Tipo
+        if item[0].lower() == nome_item.lower():
+            return {"nome": item[0], "tipo": item[1]}
+    return None
 
 --- ARQUIVO: .\modelos\mapas.py ---
 
 
 # mapas 
 lista_mapas = [
-    {"id": 0, "nome": "Vila Inicial", "lvl_min": 0, "imagem": "capa.png"},
-    {"id": 1, "nome": "Acampamento do Pioneiro", "lvl_min": 1, "imagem": "acampamento1.png"},
-    {"id": 2, "nome": "Bosque Queimado", "lvl_min": 4, "imagem": "bosque-queimado2.png"},
-    {"id": 3, "nome": "Ponte dos Suspiros", "lvl_min": 6, "imagem": "ponte3.png"},
-    {"id": 4, "nome": "Tumba do Caçador Ancião", "lvl_min": 8, "imagem": "tumba4.png"},
-    {"id": 5, "nome": "Cachoeira da Serenidade", "lvl_min": 10, "imagem": "cachoeira5.png"},
-    {"id": 6, "nome": "Desfiladeiro do Eco", "lvl_min": 12, "imagem": "desfiladeiro6.png"},
-    {"id": 7, "nome": "Pico do Observador", "lvl_min": 14, "imagem": "pico7.png"},
-    {"id": 8, "nome": "Portal das Montanhas", "lvl_min": 16, "imagem": "portal8.png"}
-    
+    {
+        "id": 0, 
+        "nome": "Vila Inicial", 
+        "lvl_min": 0, 
+        "imagem": "capa.png",
+        "descricao": "Seja muito bem vindo Aventureiro!"
+    },
+    {
+        "id": 1, 
+        "nome": "Acampamento do Pioneiro", 
+        "lvl_min": 1, 
+        "imagem": "acampamento1.png",
+        "descricao": "Um lugar aparentemente seguro..."
+    },
+    {
+        "id": 2, 
+        "nome": "Bosque Queimado", 
+        "lvl_min": 4, 
+        "imagem": "bosque-queimado2.png",
+        "descricao": "Esse lugar já viveu dias melhores..."
+    },
+    {
+        "id": 3, 
+        "nome": "Ponte dos Suspiros", 
+        "lvl_min": 6, 
+        "imagem": "ponte3.png",
+        "descricao": "Ainda dá pra atravessar, confia..."
+    },
+    {
+        "id": 4, 
+        "nome": "Tumba do Caçador Ancião", 
+        "lvl_min": 8, 
+        "imagem": "tumba4.png",
+        "descricao": "Um lugar calmo e silencioso..."
+    },
+    {
+        "id": 5, 
+        "nome": "Cachoeira da Serenidade", 
+        "lvl_min": 10, 
+        "imagem": "cachoeira5.png",
+        "descricao": "Finalmente um bom lugar para descansar! Será?."
+    },
+    {
+        "id": 6, 
+        "nome": "Desfiladeiro do Eco", 
+        "lvl_min": 12, 
+        "imagem": "desfiladeiro6.png",
+        "descricao": "Que tipo de criatura viveria aqui?"
+    },
+    {
+        "id": 7, 
+        "nome": "Pico do Observador", 
+        "lvl_min": 14, 
+        "imagem": "pico7.png",
+        "descricao": "O ponto mais alto do continente. O frio é mortal e as criaturas são feitas de gelo e magia astral."
+    },
+    {
+        "id": 8, 
+        "nome": "Portal das Montanhas", 
+        "lvl_min": 16, 
+        "imagem": "portal8.png",
+        "descricao": "A fronteira final. Ou será que não...?"
+    }
 ]
     # Adicione até completar os 10 mapas...
 
@@ -2097,36 +3238,73 @@ lista_mapas = [
 import random
 
 pets = [
+    # --- PETS INICIAIS (BASEADOS NOS MODELOS EXISTENTES) ---
+    {"nome": "Falcão filhote", "vida": 45, "ataque": 4, "defesa": 2, "agilidade": 8, "imagem": "pet_falcao_filhote.png", "bonus": "+2% HP Máximo", "raridade": "Comum", "mapa_origem": 0},
+    {"nome": "Lobo filhote", "vida": 40, "ataque": 5, "defesa": 3, "agilidade": 5, "imagem": "pet_lobo_filhote.png", "bonus": "+2% de Ataque", "raridade": "Comum", "mapa_origem": 0},
+    {"nome": "Tartaruga filhote", "vida": 60, "ataque": 2, "defesa": 5, "agilidade": 1, "imagem": "pet_tartaruga_filhote.png", "bonus": "+2% de Defesa", "raridade": "Comum", "mapa_origem": 0},
+
+    # --- PETS TEMÁTICOS DOS MAPAS (RARIDADE RARO) ---
     {
-        "nome": "Falcão filhote",
-        "vida": 100,
-        "ataque": 15,
-        "defesa": 5,
-        "agilidade": 20,
-        "imagem": "pet_falcao_filhote.png"
+        "nome": "Escudeiro de Casca", "vida": 50, "ataque": 3, "defesa": 6, "agilidade": 2, 
+        "imagem": "pet_escudeiro_casca.png", "bonus": "+10% de Defesa", "raridade": "Raro", "mapa_origem": 1
     },
     {
-        "nome": "Lobo filhote",
-        "vida": 120,
-        "ataque": 20,
-        "defesa": 10,
-        "agilidade": 15,
-        "imagem": "pet_lobo_filhote.png"
+        "nome": "Raposa de Cinza", "vida": 42, "ataque": 7, "defesa": 3, "agilidade": 6, 
+        "imagem": "pet_raposa_cinza.png", "bonus": "+10% de Ataque", "raridade": "Raro", "mapa_origem": 2
     },
     {
-        "nome": "Tartaruga filhote",
-        "vida": 150,
-        "ataque": 10,
-        "defesa": 15,
-        "agilidade": 8,
-        "imagem": "pet_tartaruga_filhote.png"
+        "nome": "Morcego de Ébano", "vida": 38, "ataque": 6, "defesa": 2, "agilidade": 10, 
+        "imagem": "pet_morcego_ebano.png", "bonus": "+10% de XP", "raridade": "Raro", "mapa_origem": 3
+    },
+    {
+        "nome": "Serpente de Lodo", "vida": 55, "ataque": 4, "defesa": 5, "agilidade": 4, 
+        "imagem": "pet_serpente_lodo.png", "bonus": "+10% Sorte", "raridade": "Raro", "mapa_origem": 4
+    },
+    {
+        "nome": "Escorpião de Bronze", "vida": 48, "ataque": 8, "defesa": 4, "agilidade": 5, 
+        "imagem": "pet_escorpiao_bronze.png", "bonus": "+10% de Gold", "raridade": "Raro", "mapa_origem": 5
+    },
+    {
+        "nome": "Draco de Mica", "vida": 52, "ataque": 5, "defesa": 6, "agilidade": 7, 
+        "imagem": "pet_draco_mica.png", "bonus": "+10% de Mithril Encontrado", "raridade": "Raro", "mapa_origem": 6
+    },
+    {
+        "nome": "Coruja de Vidro Astral", "vida": 50, "ataque": 6, "defesa": 5, "agilidade": 12, 
+        "imagem": "pet_coruja_astral.png", "bonus": "+10% de Critico", "raridade": "Raro", "mapa_origem": 7
+    },
+    {
+        "nome": "Sentinela de Marfim", "vida": 70, "ataque": 9, "defesa": 9, "agilidade": 3, 
+        "imagem": "pet_sentinela_marfim.png", "bonus": "+10% de Vida", "raridade": "Raro", "mapa_origem": 8
     }
 ]
 
-def sortear_pet():
-    return random.choice(pets)
+def sortear_pet(mapa_id=0):
+    """
+    Sorteia um pet. 
+    Se o mapa_id for passado (maior que 0), tenta dar o pet da região.
+    Se mapa_id for 0 (como no cadastro), dá um dos iniciais.
+    """
+    # Lista filtrada
+    raro_do_mapa = [p for p in pets if p['mapa_origem'] == mapa_id and p['raridade'] == "Raro"]
+    
+    # No cadastro ou mapas iniciais, chance fixa nos Pets Iniciais
+    if mapa_id == 0 or not raro_do_mapa:
+        iniciais = [p for p in pets if p['raridade'] == "Comum"]
+        return random.choice(iniciais)
+    
+    # Em mapas específicos: 30% de vir o Pet Raro do Mapa, senão um inicial
+    if random.randint(1, 100) <= 30:
+        return random.choice(raro_do_mapa)
+    else:
+        iniciais = [p for p in pets if p['raridade'] == "Comum"]
+        return random.choice(iniciais)
 
-
+def buscar_modelo_pet(nome_procurado):
+    """Procura um pet na lista de modelos pelo nome exato"""
+    for p in pets:
+        if p['nome'].lower() == nome_procurado.lower():
+            return p
+    return None
 
 --- ARQUIVO: .\modelos\__init__.py ---
 # Esse aruivo transforma a pasta em módulo

@@ -8,7 +8,7 @@ async def iniciar_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data["login_etapa"] = "nick"
-    await query.edit_message_caption("🔐 LOGIN\n\nDigite seu Nick:")
+    await query.edit_message_caption("🔐 Login\n\nDigite seu Nick:")
     
 async def processar_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     etapa = context.user_data.get("login_etapa")

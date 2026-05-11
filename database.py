@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from config import DB_NAME
 from modelos.itens import LISTA_ITENS_MESTRE
 from modelos.inimigos import LISTA_MONSTROS_MESTRE, LISTA_DROPS_MAPAS
@@ -14,7 +14,6 @@ def conectar():
     conn.row_factory = sqlite3.Row 
     return conn
 
-# --- ARQUIVO: .\database.py ---
 
 def criar_tabela():
     """Cria a estrutura inicial do banco de dados"""
@@ -38,6 +37,7 @@ def criar_tabela():
             ataque INTEGER DEFAULT 10,
             defesa INTEGER DEFAULT 10,
             sorte INTEGER DEFAULT 1,
+            critico INTEGER DEFAULT 1,
             pet_equipado INTEGER DEFAULT 0,
             pet_nome TEXT,
             pet_vida INTEGER,
@@ -84,7 +84,7 @@ def criar_tabela():
         )
     ''')
 
-    # 3. Tabela Mestre de Itens
+    # 3. Tabela Mestre de Itens Mestre
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS itens_mestre (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,7 +93,9 @@ def criar_tabela():
             subtipo TEXT,
             valor_efeito INTEGER DEFAULT 0,
             descricao TEXT,
-            preco_gold INTEGER DEFAULT 0
+            preco_gold INTEGER DEFAULT 0,
+            chance_drop INTEGER DEFAULT 0,
+            nivel_max INTEGER DEFAULT 0
         )
     ''')
 
@@ -124,7 +126,23 @@ def criar_tabela():
     ''')
     conn.commit()
     conn.close()
-    
+
+
+def criar_tabela_incubadora():
+    """Cria a tabela para monitorar ovos chocando."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS incubacao_ativa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            ovo_nome TEXT,
+            tempo_final TEXT -- Salvaremos a data/hora final como string
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
 
 
 def popular_dados_iniciais():
@@ -134,8 +152,8 @@ def popular_dados_iniciais():
 
     # 1. ITENS MESTRE
     cursor.executemany("""
-        INSERT OR REPLACE INTO itens_mestre (nome, tipo, subtipo, valor_efeito, descricao, preco_gold) 
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO itens_mestre (nome, tipo, subtipo, valor_efeito, descricao, preco_gold, chance_drop, nivel_max) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, LISTA_ITENS_MESTRE)
 
     # 2. MONSTROS MESTRE
@@ -153,32 +171,27 @@ def popular_dados_iniciais():
 
     conn.commit()
     conn.close()
-    print("✅ Banco de dados sincronizado com os arquivos de modelos!")
     
-
 def get_drop_aleatorio(mapa_id):
-    """Sorteia um item baseado nos drops disponíveis para o mapa atual"""
+    """Sorteia itens normais baseados apenas na chance do mapa/item."""
     conn = conectar()
     cursor = conn.cursor()
-    # Busca todos os possíveis drops configurados para este mapa
     cursor.execute("SELECT item_nome, chance FROM drops_mapas WHERE mapa_id = ?", (mapa_id,))
-    possibilidades = cursor.fetchall()
+    drops_regionais = cursor.fetchall()
+    cursor.execute("SELECT nome as item_nome, chance_drop as chance FROM itens_mestre WHERE chance_drop > 0")
+    drops_globais = cursor.fetchall()
     conn.close()
 
-    if not possibilidades:
-        return None
+    todas_as_chances = list(drops_regionais) + list(drops_globais)
+    if not todas_as_chances: return None
 
-    # Embaralha para não beneficiar sempre o primeiro da lista
     import random
-    lista_temp = list(possibilidades)
-    random.shuffle(lista_temp)
-
-    for item in lista_temp:
-        # Se o número sorteado for menor ou igual à chance (ex: 20%), o item cai
+    random.shuffle(todas_as_chances)
+    for item in todas_as_chances:
         if random.randint(1, 100) <= item['chance']:
             return item['item_nome']
-    
     return None
+
     
 def get_monstro_aleatorio(mapa_id):
     """Busca um monstro aleatório do mapa específico no banco de dados"""
@@ -271,57 +284,58 @@ def resetar_localizacao(user_id):
     conn.commit()
     conn.close()
 
-# --- ARQUIVO: .\database.py ---
-
 
 def atualizar_estrutura_banco():
-    """Corrige colunas faltantes e resolve problemas de compatibilidade"""
+    """Verifica e adiciona colunas faltantes em todas as tabelas de forma segura."""
     conn = conectar()
     cursor = conn.cursor()
     
-    # 1. Definindo as colunas que PRECISAM existir na tabela personagens
-    colunas_necessarias = {
+    # --- ATUALIZAÇÕES NA TABELA: personagens ---
+    colunas_personagens = {
         "vida_max": "INTEGER DEFAULT 100",
         "pet_xp": "INTEGER DEFAULT 0",
         "pet_level": "INTEGER DEFAULT 1",
         "mochila_slots": "INTEGER DEFAULT 10",
-        "pet_equipado": "INTEGER DEFAULT 0" # <--- Adicionamos aqui!
+        "pet_equipado": "INTEGER DEFAULT 0",
+        "arma_equipada": "TEXT DEFAULT 'Nenhuma'",
+        "armadura_equipada": "TEXT DEFAULT 'Nenhuma'",
+        "critico": "INTEGER DEFAULT 1",
+        "set_equipado": "TEXT DEFAULT 'Nenhuma'",
+        "acessorio_equipado": "TEXT DEFAULT 'Nenhuma'",
+        "mithril": "INTEGER DEFAULT 0"
     }
     
-    # Verifica quais colunas já existem
     cursor.execute("PRAGMA table_info(personagens)")
-    colunas_existentes = [info[1] for info in cursor.fetchall()]
+    existentes_p = [info[1] for info in cursor.fetchall()]
     
-    # Adiciona apenas as que faltam
-    for nome, tipo in colunas_necessarias.items():
-        if nome not in colunas_existentes:
-            try:
-                cursor.execute(f"ALTER TABLE personagens ADD COLUMN {nome} {tipo}")
-                print(f"DEBUG DB: Coluna '{nome}' criada com sucesso.")
-            except sqlite3.OperationalError as e:
-                print(f"DEBUG DB: Erro ao criar coluna {nome}: {e}")
+    for nome, tipo in colunas_personagens.items():
+        if nome not in existentes_p:
+            cursor.execute(f"ALTER TABLE personagens ADD COLUMN {nome} {tipo}")
+            print(f"✅ Coluna '{nome}' adicionada em 'personagens'.")
 
-    # --- RESET DA TABELA DE DROPS (MANTENHA A SUA LÓGICA) ---
-    cursor.execute("PRAGMA table_info(drops_monstros)")
-    colunas = [col[1] for col in cursor.fetchall()]
+    # --- ATUALIZAÇÕES NA TABELA: inventario ---
+    colunas_inventario = {
+        "equipado": "INTEGER DEFAULT 0",
+        "nivel_refino": "INTEGER DEFAULT 0"
+    }
     
-    if "monstro_nome" not in colunas and len(colunas) > 0:
-        print("⚠️ Corrigindo tabela drops_monstros...")
-        cursor.execute("DROP TABLE IF EXISTS drops_monstros")
-        cursor.execute('''
-            CREATE TABLE drops_monstros (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                monstro_nome TEXT,
-                item_nome TEXT,
-                chance INTEGER,
-                qtd_min INTEGER DEFAULT 1,
-                qtd_max INTEGER DEFAULT 1
-            )
-        ''')
-            
+    cursor.execute("PRAGMA table_info(inventario)")
+    existentes_inv = [info[1] for info in cursor.fetchall()]
+    
+    for nome, tipo in colunas_inventario.items():
+        if nome not in existentes_inv:
+            cursor.execute(f"ALTER TABLE inventario ADD COLUMN {nome} {tipo}")
+            print(f"✅ Coluna '{nome}' adicionada em 'inventario'.")
+
+    # --- ATUALIZAÇÕES NA TABELA: itens_mestre ---
+    cursor.execute("PRAGMA table_info(itens_mestre)")
+    existentes_mestre = [info[1] for info in cursor.fetchall()]
+    if "nivel_max" not in existentes_mestre:
+        cursor.execute("ALTER TABLE itens_mestre ADD COLUMN nivel_max INTEGER DEFAULT 0")
+        print("✅ Coluna 'nivel_max' adicionada em 'itens_mestre'.")
+    
     conn.commit()
     conn.close()
-    
 
     
 def subir_de_nivel(user_id):
@@ -372,75 +386,64 @@ def subir_de_nivel(user_id):
     return None
 
 
-def adicionar_item_inventario(user_id, item_nome, tipo, qtd=1):
-    """Adiciona um item. Se for consumível, não ocupa slot de mochila."""
+def curar_personagem_custom(user_id, valor_hp):
+    """Cura o personagem para um valor específico (usado para aplicar bônus de Set/Pet)"""
     conn = conectar()
     cursor = conn.cursor()
-
-    # 1. Verifica se o jogador já tem esse item (para empilhar/stack)
-    cursor.execute(
-        "SELECT quantidade FROM inventario WHERE user_id = ? AND item_nome = ?", 
-        (user_id, item_nome)
-    )
-    item_existente = cursor.fetchone()
-
-    if item_existente:
-        # Se já existe, apenas aumentamos a quantidade (independente do tipo)
-        nova_qtd = item_existente['quantidade'] + qtd
-        cursor.execute(
-            "UPDATE inventario SET quantidade = ? WHERE user_id = ? AND item_nome = ?",
-            (nova_qtd, user_id, item_nome)
-        )
-        conn.commit()
-        conn.close()
-        return True, "Item empilhado!"
-
-    # 2. SE O ITEM É NOVO:
-    # Se for CONSUMÍVEL, ele entra direto, sem checar limite de slots
-    if tipo == 'consumivel':
-        cursor.execute(
-            "INSERT INTO inventario (user_id, item_nome, tipo, quantidade) VALUES (?, ?, ?, ?)",
-            (user_id, item_nome, tipo, qtd)
-        )
-        conn.commit()
-        conn.close()
-        return True, "Consumível adicionado!"
-
-    # 3. SE NÃO FOR CONSUMÍVEL (Equipamentos, Ovos, etc): Checa limite
-    # Contamos apenas itens que NÃO são consumíveis
-    cursor.execute(
-        "SELECT COUNT(*) as total FROM inventario WHERE user_id = ? AND tipo != 'consumivel'", 
-        (user_id,)
-    )
-    total_ocupado = cursor.fetchone()['total']
-
-    cursor.execute("SELECT mochila_slots FROM personagens WHERE user_id = ?", (user_id,))
-    limite = cursor.fetchone()['mochila_slots']
-
-    if total_ocupado >= limite:
-        conn.close()
-        return False, "Mochila de equipamentos cheia!"
-
-    # Se tem espaço, adiciona o item de slot
-    cursor.execute(
-        "INSERT INTO inventario (user_id, item_nome, tipo, quantidade) VALUES (?, ?, ?, ?)",
-        (user_id, item_nome, tipo, qtd)
-    )
+    # Define a vida atual como o valor total (com bônus) passado
+    cursor.execute("UPDATE personagens SET vida = ? WHERE user_id = ?", (valor_hp, user_id))
     conn.commit()
     conn.close()
-    return True, "Equipamento adicionado!"
 
-def get_inventario(user_id):
-    """Busca todos os itens que o jogador possui na mochila"""
+
+def adicionar_item_inventario(user_id, item_nome, tipo, qtd=1):
+    """Adiciona itens. Apenas EQUIPAMENTOS ocupam slots na mochila."""
     conn = conectar()
     cursor = conn.cursor()
+
+    # 1. Se for EQUIPAMENTO, verificamos o limite de slots
+    if tipo == 'equipamento':
+        cursor.execute("SELECT mochila_slots FROM personagens WHERE user_id = ?", (user_id,))
+        limite_slots = cursor.fetchone()['mochila_slots']
+
+        # Conta quantos equipamentos o jogador já possui
+        cursor.execute("SELECT COUNT(*) as ocupados FROM inventario WHERE user_id = ? AND tipo = 'equipamento'", (user_id,))
+        slots_ocupados = cursor.fetchone()['ocupados']
+
+        if slots_ocupados + qtd > limite_slots:
+            conn.close()
+            return False, f"🎒 Mochila cheia! ({slots_ocupados}/{limite_slots})"
+
+        # Insere cada equipamento como uma linha única (para permitir encantamentos/status individuais no futuro)
+        for _ in range(qtd):
+            cursor.execute(
+                "INSERT INTO inventario (user_id, item_nome, tipo, quantidade, equipado) VALUES (?, ?, ?, 1, 0)",
+                (user_id, item_nome, tipo)
+            )
     
-    # Buscamos o nome, a quantidade e o tipo de cada item do usuário
+    # 2. Se for MATERIAL ou CONSUMÍVEL, não ocupa slot e acumula (stack)
+    else:
+        cursor.execute("SELECT quantidade FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, item_nome))
+        item_existente = cursor.fetchone()
+        
+        if item_existente:
+            cursor.execute("UPDATE inventario SET quantidade = quantidade + ? WHERE user_id = ? AND item_nome = ?", (qtd, user_id, item_nome))
+        else:
+            cursor.execute("INSERT INTO inventario (user_id, item_nome, tipo, quantidade) VALUES (?, ?, ?, ?)", (user_id, item_nome, tipo, qtd))
+
+    conn.commit()
+    conn.close()
+    return True, "Item adicionado!"
+
+def get_inventario(user_id):
+    """Busca todos os itens, incluindo o ID único e o nível de refino."""
+    conn = conectar()
+    cursor = conn.cursor()
     cursor.execute(
-        "SELECT item_nome, quantidade, tipo FROM inventario WHERE user_id = ?", 
+        "SELECT id, item_nome, quantidade, tipo, equipado, nivel_refino FROM inventario WHERE user_id = ?", 
         (user_id,)
     )
-    itens = cursor.fetchall() # fetchall() traz a lista completa
+    itens = cursor.fetchall() 
     
     conn.close()
     return itens
@@ -450,16 +453,21 @@ def calcular_xp_necessario(level):
     # Lvl 1: 100 XP
     # Lvl 2: 100 + (1 * 150) = 250 XP
     # Lvl 3: 100 + (2 * 150) = 400 XP...
-    return 100 + (level - 1) * 150
+    return 100 + (level - 1) * 175
 
 def usar_pocao_cura(user_id, item_nome, cura_quantidade):
-    """Diminui o item da mochila e cura o jogador"""
+    """Diminui o item da mochila e cura o jogador considerando os bônus de equipamentos."""
     conn = conectar()
     cursor = conn.cursor()
 
-    # 1. Busca vida atual e máxima
-    cursor.execute("SELECT vida, vida_max FROM personagens WHERE user_id = ?", (user_id,))
-    jogador = cursor.fetchone()
+    # 1. Busca o jogador bruto e aplica os bônus para saber a VIDA MÁXIMA REAL
+    jogador_bruto = get_jogador(user_id)
+    if not jogador_bruto:
+        conn.close()
+        return False, "Jogador não encontrado."
+    
+    # Aplicamos os bônus (Pet + Itens) para ter o teto real de cura
+    jogador = aplicar_bonus_geral(dict(jogador_bruto))
 
     # 2. Busca o item (ignora maiúsculas no SQL)
     cursor.execute(
@@ -470,8 +478,9 @@ def usar_pocao_cura(user_id, item_nome, cura_quantidade):
 
     if not item:
         conn.close()
-        return False, "Você não possui este item!"
+        return False, f"Você não possui {item_nome}!"
 
+    # CHECAGEM CORRIGIDA: Usa o vida_max com bônus
     if jogador['vida'] >= jogador['vida_max']:
         conn.close()
         return False, "Sua vida já está cheia!"
@@ -483,7 +492,7 @@ def usar_pocao_cura(user_id, item_nome, cura_quantidade):
     else:
         cursor.execute("DELETE FROM inventario WHERE user_id = ? AND item_nome = ?", (user_id, nome_real))
 
-    # 4. Aplica a cura
+    # 4. Aplica a cura limitada ao máximo real
     nova_vida = min(jogador['vida'] + cura_quantidade, jogador['vida_max'])
     cursor.execute("UPDATE personagens SET vida = ? WHERE user_id = ?", (nova_vida, user_id))
 
@@ -708,3 +717,462 @@ def get_pet_por_id(pet_id):
     conn.close()
     return pet
 
+
+def equipar_desequipar_db(user_id, item_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT item_nome, equipado FROM inventario WHERE id = ?", (item_id,))
+    item_inv = cursor.fetchone()
+    
+    if not item_inv:
+        conn.close()
+        return False, "Item não encontrado."
+
+    item_nome = item_inv['item_nome']
+    
+    cursor.execute("SELECT subtipo FROM itens_mestre WHERE nome = ?", (item_nome,))
+    subtipo = cursor.fetchone()['subtipo']
+    
+    # MAPEAMENTO DE SLOTS
+    mapeamento = {
+        "arma": "arma_equipada",
+        "armadura": "armadura_equipada",
+        "conjunto": "set_equipado",
+        "acessorio": "acessorio_equipado"  # Novo slot!
+    }
+
+    if subtipo not in mapeamento:
+        conn.close()
+        return False, "Este tipo de item não pode ser equipado."
+
+    coluna_perso = mapeamento[subtipo]
+
+    if item_inv['equipado'] == 1:
+        cursor.execute("UPDATE inventario SET equipado = 0 WHERE id = ?", (item_id,))
+        cursor.execute(f"UPDATE personagens SET {coluna_perso} = 'Nenhuma' WHERE user_id = ?", (user_id,))
+        msg = f"Você desequipou {item_nome}."
+    else:
+        # Desequipa apenas o que estiver no MESMO slot (ex: desequipa bússola mas mantém o set)
+        cursor.execute("""
+            UPDATE inventario SET equipado = 0 
+            WHERE user_id = ? AND item_nome IN (SELECT nome FROM itens_mestre WHERE subtipo = ?)
+        """, (user_id, subtipo))
+        
+        cursor.execute("UPDATE inventario SET equipado = 1 WHERE id = ?", (item_id,))
+        cursor.execute(f"UPDATE personagens SET {coluna_perso} = ? WHERE user_id = ?", (item_nome, user_id))
+        msg = f"Você equipou {item_nome}!"
+
+    conn.commit()
+    conn.close()
+    return True, msg
+
+
+def calcular_bonus_equipamentos(user_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.nivel_refino, m.subtipo, m.valor_efeito, m.nome 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.user_id = ? AND i.equipado = 1
+    """, (user_id,))
+    
+    itens_equipados = cursor.fetchall()
+    conn.close()
+
+    bonus = {"ataque": 0, "defesa": 0, "vida_max": 0, "sorte": 0}
+
+    for item in itens_equipados:
+        sub = item['subtipo']
+        val = item['valor_efeito'] + ((item['nivel_refino'] or 0) * 2)
+
+        if sub == 'arma': bonus['ataque'] += val
+        elif sub == 'armadura': bonus['defesa'] += val
+        elif sub == 'conjunto':
+            bonus['ataque'] += val
+            bonus['defesa'] += val
+            bonus['vida_max'] += (val * 2)
+        elif sub == 'acessorio': # Lógica para o novo slot
+            if item['nome'] == 'Bússola': bonus['sorte'] += val
+            if item['nome'] == 'Binóculos': bonus['ataque'] += val # Exemplo de bônus do binóculo
+            
+    return bonus
+
+
+def aplicar_bonus_geral(jogador_bruto):
+    """Aplica bônus de Equipamentos e agora os novos bônus de 10% dos Pets."""
+    jogador = dict(jogador_bruto)
+    user_id = jogador['user_id']
+
+    # 1. BÔNUS DE EQUIPAMENTOS (Armas, Armaduras, Sets)
+    bonus_itens = calcular_bonus_equipamentos(user_id)
+    jogador['ataque'] += bonus_itens['ataque']
+    jogador['defesa'] += bonus_itens['defesa']
+    jogador['vida_max'] += bonus_itens['vida_max']
+    jogador['sorte'] += bonus_itens['sorte']
+
+    # 2. BÔNUS DE PET (10% baseado no nome do pet)
+    if jogador.get('pet_equipado') == 1:
+        nome_p = jogador.get('pet_nome')
+        
+        # Bônus de Status de Combate e Utilidade (Arredondado para baixo)
+        if nome_p == "Falcão filhote" or nome_p == "Sentinela de Marfim":
+            jogador['vida_max'] = int(jogador['vida_max'] * 1.10)
+        elif nome_p == "Lobo filhote" or nome_p == "Raposa de Cinza":
+            jogador['ataque'] = int(jogador['ataque'] * 1.10)
+        elif nome_p == "Tartaruga filhote" or nome_p == "Escudeiro de Casca":
+            jogador['defesa'] = int(jogador['defesa'] * 1.10)
+        elif nome_p == "Serpente de Lodo":
+            jogador['sorte'] = int(jogador['sorte'] * 1.10)
+        elif nome_p == "Coruja de Vidro Astral":
+            jogador['critico'] = int(jogador['critico'] * 1.10)
+            
+    return jogador
+
+
+def desequipar_pet_completo_db(user_id):
+    """Desequipa o pet, mas mantém os dados básicos para a UI não quebrar"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # 1. Desequipa todos na coleção
+    cursor.execute("UPDATE pets_jogador SET equipado = 0 WHERE user_id = ?", (user_id,))
+    
+    # 2. Na tabela personagens, apenas marcamos como desequipado (0)
+    # Mantemos o nome ou limpamos, mas o 'jogador_possui_pets' agora manda na UI
+    cursor.execute("""
+        UPDATE personagens 
+        SET pet_equipado = 0 
+        WHERE user_id = ?
+    """, (user_id,))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def jogador_possui_pets(user_id):
+    """Verifica se o jogador tem pelo menos um pet na coleção (equipado ou não)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT COUNT(*) as total FROM pets_jogador WHERE user_id = ?", (user_id,))
+        resultado = cursor.fetchone()
+        possui = resultado['total'] > 0 if resultado else False
+        return possui
+    except Exception as e:
+        print(f"Erro ao verificar posse de pets: {e}")
+        return False
+    finally:
+        conn.close()
+        
+        
+def vender_item_db(user_id, item_id, vender_tudo=False):
+    """Remove o item e adiciona gold, considerando o nível de melhoria para o preço."""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Busca detalhes do item e preço mestre
+    cursor.execute("""
+        SELECT i.item_nome, i.quantidade, i.nivel_refino, i.equipado, m.preco_gold 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.id = ? AND i.user_id = ?
+    """, (item_id, user_id))
+    item = cursor.fetchone()
+
+    if not item:
+        conn.close()
+        return False, "Item não encontrado."
+    
+    if item['equipado'] == 1:
+        conn.close()
+        return False, "Você não pode vender algo que está usando!"
+
+    # --- Lógica de Valorização ---
+    qtd_a_vender = item['quantidade'] if vender_tudo else 1
+    
+    valor_base = int(item['preco_gold'] * 0.7)
+    bonus_melhoria = (item['nivel_refino'] or 0) * 150 # Cada +1 adiciona 150 gold ao valor
+    
+    valor_total = (valor_base + bonus_melhoria) * qtd_a_vender
+
+    # --- Processo de Venda ---
+    if vender_tudo or item['quantidade'] <= 1:
+        cursor.execute("DELETE FROM inventario WHERE id = ?", (item_id,))
+    else:
+        cursor.execute("UPDATE inventario SET quantidade = quantidade - 1 WHERE id = ?", (item_id,))
+
+    cursor.execute("UPDATE personagens SET gold = gold + ? WHERE user_id = ?", (valor_total, user_id))
+    
+    conn.commit()
+    conn.close()
+    return True, f"💰 Vendido por {valor_total} Gold!"
+
+
+def get_todos_equipados(user_id):
+    """Busca todos os itens que o jogador está vestindo no momento (Arma, Armadura, Set)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.id, i.item_nome, i.nivel_refino, m.valor_efeito, m.subtipo
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.user_id = ? AND i.equipado = 1
+    """, (user_id,))
+    itens = cursor.fetchall()
+    conn.close()
+    return itens
+
+def get_item_por_id_forja(item_id):
+    """Busca um item específico pelo ID para mostrar na tela de confirmação da forja"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.id, i.item_nome, i.nivel_refino, m.valor_efeito, m.subtipo
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.id = ?
+    """, (item_id,))
+    item = cursor.fetchone()
+    conn.close()
+    return item
+
+def executar_refino_db(user_id, item_id, custo_gold):
+    """Aumenta o refino se o jogador tiver gold e não tiver atingido o limite do item."""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Busca dados do item e o limite dele
+    cursor.execute("""
+        SELECT i.nivel_refino, m.nivel_max, p.gold 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        JOIN personagens p ON p.user_id = i.user_id
+        WHERE i.id = ? AND i.user_id = ?
+    """, (item_id, user_id))
+    dados = cursor.fetchone()
+
+    if not dados:
+        conn.close()
+        return False, "Erro ao buscar dados do item."
+
+    if dados['gold'] < custo_gold:
+        conn.close()
+        return False, "Ouro insuficiente! 💰"
+
+    if dados['nivel_refino'] >= dados['nivel_max']:
+        conn.close()
+        return False, f"⚠️ Este item já atingiu o nível máximo (+{dados['nivel_max']})!"
+
+    # Executa o refino
+    cursor.execute("UPDATE inventario SET nivel_refino = nivel_refino + 1 WHERE id = ?", (item_id,))
+    cursor.execute("UPDATE personagens SET gold = gold - ? WHERE user_id = ?", (custo_gold, user_id))
+    
+    conn.commit()
+    conn.close()
+    return True, "✨ Forja concluída com sucesso!"
+
+
+def criar_tabela_missoes():
+    """Cria a estrutura para missões diárias"""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS missoes_diarias (
+            user_id INTEGER,
+            tipo TEXT,
+            progresso INTEGER DEFAULT 0,
+            objetivo INTEGER,
+            recompensa_gold INTEGER,
+            reivindicada INTEGER DEFAULT 0,
+            data_missao TEXT,
+            PRIMARY KEY (user_id, tipo)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+def get_ou_criar_missoes(user_id):
+    """Busca as missões do dia. Se a data mudou, reseta o progresso."""
+    conn = conectar()
+    cursor = conn.cursor()
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    
+    # NOVAS MISSÕES DEFINIDAS AQUI
+    # Formato: (tipo, objetivo, recompensa_gold)
+    missoes_def = [
+        ('caca', 50, 500),       # Caçar 5 monstros
+        ('gold', 300, 500),     # Ganhar 300 gold em caça
+        ('pocao', 3, 150),       # Usar 3 poções em combate
+        ('forja', 2, 500),      # Realizar 1 refino no ateliê
+        ('venda', 5, 250),       # Vender 5 itens no ateliê
+        ('alimentar', 10, 180)  # Dar 10 frutas para o pet
+    ]
+    
+    missoes_finais = []
+    for tipo, obj, rec in missoes_def:
+        cursor.execute("SELECT * FROM missoes_diarias WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+        m = cursor.fetchone()
+        
+        if not m or m['data_missao'] != hoje:
+            cursor.execute("""
+                INSERT OR REPLACE INTO missoes_diarias 
+                (user_id, tipo, progresso, objetivo, recompensa_gold, reivindicada, data_missao)
+                VALUES (?, ?, 0, ?, ?, 0, ?)
+            """, (user_id, tipo, obj, rec, hoje))
+            conn.commit()
+            cursor.execute("SELECT * FROM missoes_diarias WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+            m = cursor.fetchone()
+            
+        missoes_finais.append(dict(m))
+        
+    conn.close()
+    return missoes_finais
+
+
+def atualizar_progresso_missao(user_id, tipo, valor=1):
+    """Aumenta o progresso de uma missão específica (se não estiver reivindicada)"""
+    conn = conectar()
+    cursor = conn.cursor()
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    
+    cursor.execute("""
+        UPDATE missoes_diarias 
+        SET progresso = progresso + ? 
+        WHERE user_id = ? AND tipo = ? AND data_missao = ? AND reivindicada = 0
+    """, (valor, user_id, tipo, hoje))
+    
+    conn.commit()
+    conn.close()
+
+def reivindicar_missao_db(user_id, tipo):
+    """Dá a recompensa e marca como concluída"""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    cursor.execute("SELECT * FROM missoes_diarias WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+    missao = cursor.fetchone()
+    
+    if missao and missao['progresso'] >= missao['objetivo'] and missao['reivindicada'] == 0:
+        cursor.execute("UPDATE missoes_diarias SET reivindicada = 1 WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+        cursor.execute("UPDATE personagens SET gold = gold + ? WHERE user_id = ?", (missao['recompensa_gold'], user_id))
+        conn.commit()
+        conn.close()
+        return True, f"💰 Você recebeu {missao['recompensa_gold']} Gold!"
+    
+    conn.close()
+    return False, "Missão ainda não concluída ou já resgatada."
+
+
+def sortear_ovo_diario(user_id, mapa_id):
+    """Sorteia o drop de um ovo nomeado pela Região do mapa."""
+    jogador_bruto = get_jogador(user_id)
+    jogador = aplicar_bonus_geral(dict(jogador_bruto))
+    sorte = jogador.get('sorte', 0)
+    
+    # 5% de chance base + bônus de sorte
+    chance = 5 + (sorte * 0.5) 
+    
+    import random
+    if random.uniform(1, 100) <= chance:
+        if mapa_id == 0: return "Ovo [Vila]"
+        return f"Ovo [Região {mapa_id}]"
+    
+    return None
+
+def get_ovos_jogador(user_id):
+    """Busca apenas itens do subtipo 'ovo' no inventário do jogador."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT i.id, i.item_nome, i.quantidade 
+        FROM inventario i
+        JOIN itens_mestre m ON i.item_nome = m.nome
+        WHERE i.user_id = ? AND m.subtipo = 'ovo'
+    """, (user_id,))
+    ovos = cursor.fetchall()
+    conn.close()
+    return ovos
+
+
+def iniciar_incubacao_db(user_id, ovo_nome, horas):
+    """Registra o início do processo de chocar."""
+    tempo_final = datetime.now() + timedelta(hours=horas)
+    tempo_str = tempo_final.strftime("%Y-%m-%d %H:%M:%S")
+    
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO incubacao_ativa (user_id, ovo_nome, tempo_final) VALUES (?, ?, ?)",
+        (user_id, ovo_nome, tempo_str)
+    )
+    conn.commit()
+    conn.close()
+
+def get_incubacoes_ativas(user_id):
+    """Busca TODOS os ovos que o jogador está chocando no momento."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM incubacao_ativa WHERE user_id = ?", (user_id,))
+    res = cursor.fetchall() 
+    conn.close()
+    return res
+
+def remover_incubacao_por_id(incubacao_id):
+    """Remove um registro específico da incubadora pelo seu ID único."""
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM incubacao_ativa WHERE id = ?", (incubacao_id,))
+    conn.commit()
+    conn.close()
+    
+    
+def consumir_materiais_alquimia(user_id, ingredientes, custo_gold):
+    """
+    Verifica se o jogador possui Gold e todos os materiais. Consome se tiver.
+    ingredientes: Lista de tuplas [('Item A', qtd), ('Item B', qtd)]
+    """
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    try:
+        # 1. Verifica Gold
+        cursor.execute("SELECT gold FROM personagens WHERE user_id = ?", (user_id,))
+        gold_atual = cursor.fetchone()['gold']
+        if gold_atual < custo_gold:
+            conn.close()
+            return False, "Ouro insuficiente para a transmutação! 💰"
+
+        # 2. Verifica Materiais
+        for nome_item, qtd_necessaria in ingredientes:
+            cursor.execute(
+                "SELECT quantidade FROM inventario WHERE user_id = ? AND item_nome = ? COLLATE NOCASE", 
+                (user_id, nome_item)
+            )
+            resultado = cursor.fetchone()
+            if not resultado or resultado['quantidade'] < qtd_necessaria:
+                conn.close()
+                return False, f"Faltam ingredientes: {nome_item} 📦"
+
+        # 3. Consome Gold
+        cursor.execute("UPDATE personagens SET gold = gold - ? WHERE user_id = ?", (custo_gold, user_id))
+
+        # 4. Consome Itens
+        for nome_item, qtd_necessaria in ingredientes:
+            cursor.execute("""
+                UPDATE inventario SET quantidade = quantidade - ? 
+                WHERE user_id = ? AND item_nome = ? COLLATE NOCASE
+            """, (qtd_necessaria, user_id, nome_item))
+            
+            # Limpa itens com quantidade 0
+            cursor.execute("DELETE FROM inventario WHERE user_id = ? AND item_nome = ? AND quantidade <= 0", (user_id, nome_item))
+        
+        conn.commit()
+        return True, "Materiais transmutados com sucesso!"
+    except Exception as e:
+        print(f"Erro na alquimia (DB): {e}")
+        return False, "Erro arcano no banco de dados."
+    finally:
+        conn.close()
