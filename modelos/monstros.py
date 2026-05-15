@@ -11,35 +11,35 @@ pets = [
     # --- PETS TEMÁTICOS DOS MAPAS (RARIDADE RARO) ---
     {
         "nome": "Escudeiro de Casca", "vida": 50, "ataque": 3, "defesa": 6, "agilidade": 2, 
-        "imagem": "pet_escudeiro_casca.png", "bonus": "+10% de Defesa", "raridade": "Raro", "mapa_origem": 1
+        "imagem": "pet_escudeiro_casca.jpg", "bonus": "+10% de Defesa", "raridade": "Raro", "mapa_origem": 1
     },
     {
         "nome": "Raposa de Cinza", "vida": 42, "ataque": 7, "defesa": 3, "agilidade": 6, 
-        "imagem": "pet_raposa_cinza.png", "bonus": "+10% de Ataque", "raridade": "Raro", "mapa_origem": 2
+        "imagem": "pet_raposa_cinza.jpg", "bonus": "+10% de Ataque", "raridade": "Raro", "mapa_origem": 2
     },
     {
         "nome": "Morcego de Ébano", "vida": 38, "ataque": 6, "defesa": 2, "agilidade": 10, 
-        "imagem": "pet_morcego_ebano.png", "bonus": "+10% de XP", "raridade": "Raro", "mapa_origem": 3
+        "imagem": "pet_morcego_ebano.jpg", "bonus": "+10% de XP", "raridade": "Raro", "mapa_origem": 3
     },
     {
         "nome": "Serpente de Lodo", "vida": 55, "ataque": 4, "defesa": 5, "agilidade": 4, 
-        "imagem": "pet_serpente_lodo.png", "bonus": "+10% Sorte", "raridade": "Raro", "mapa_origem": 4
+        "imagem": "pet_serpente_lodo.jpg", "bonus": "+10% Sorte", "raridade": "Raro", "mapa_origem": 4
     },
     {
         "nome": "Escorpião de Bronze", "vida": 48, "ataque": 8, "defesa": 4, "agilidade": 5, 
-        "imagem": "pet_escorpiao_bronze.png", "bonus": "+10% de Gold", "raridade": "Raro", "mapa_origem": 5
+        "imagem": "pet_escorpiao_bronze.jpg", "bonus": "+10% de Gold", "raridade": "Raro", "mapa_origem": 5
     },
     {
         "nome": "Draco de Mica", "vida": 52, "ataque": 5, "defesa": 6, "agilidade": 7, 
-        "imagem": "pet_draco_mica.png", "bonus": "+10% de Mithril Encontrado", "raridade": "Raro", "mapa_origem": 6
+        "imagem": "pet_draco_mica.jpg", "bonus": "+10% de Mithril Encontrado", "raridade": "Raro", "mapa_origem": 6
     },
     {
         "nome": "Coruja de Vidro Astral", "vida": 50, "ataque": 6, "defesa": 5, "agilidade": 12, 
-        "imagem": "pet_coruja_astral.png", "bonus": "+10% de Critico", "raridade": "Raro", "mapa_origem": 7
+        "imagem": "pet_coruja_astral.jpg", "bonus": "+10% de Critico", "raridade": "Raro", "mapa_origem": 7
     },
     {
         "nome": "Sentinela de Marfim", "vida": 70, "ataque": 9, "defesa": 9, "agilidade": 3, 
-        "imagem": "pet_sentinela_marfim.png", "bonus": "+10% de Vida", "raridade": "Raro", "mapa_origem": 8
+        "imagem": "pet_sentinela_marfim.jpg", "bonus": "+10% de Vida", "raridade": "Raro", "mapa_origem": 8
     }
 ]
 

@@ -142,6 +142,27 @@ def criar_tabela_incubadora():
     ''')
     conn.commit()
     conn.close()
+    
+    
+def criar_tabelas_adicionais():
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS masmorras_mestre (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mapa_id INTEGER,
+            andar INTEGER, -- 1, 2 ou 3
+            nome TEXT,
+            vida INTEGER,
+            ataque INTEGER,
+            defesa INTEGER,
+            xp_recompensa INTEGER,
+            gold_recompensa INTEGER,
+            imagem TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
 
 
@@ -149,6 +170,21 @@ def popular_dados_iniciais():
     """Lê os arquivos de modelos e popula o banco de dados"""
     conn = conectar()
     cursor = conn.cursor()
+    
+    # Criação da tabela de Masmorra se não existir
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS masmorras_mestre (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mapa_id INTEGER,
+            andar INTEGER,
+            nome TEXT,
+            vida INTEGER,
+            ataque INTEGER,
+            defesa INTEGER,
+            xp_recompensa INTEGER,
+            gold_recompensa INTEGER
+        )
+    ''')
 
     # 1. ITENS MESTRE
     cursor.executemany("""
@@ -162,8 +198,20 @@ def popular_dados_iniciais():
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, LISTA_MONSTROS_MESTRE)
 
-    # Popular a nova tabela de drops por mapa
-    cursor.execute("DELETE FROM drops_mapas") # Limpa para atualizar
+    # 3. CHEFES DE MASMORRA (Novos dados)
+    # Formato: (Mapa_ID, Andar, Nome, Vida, Ataque, Defesa, XP, Gold)
+    from modelos.inimigos import LISTA_BOSS_MASMORRAS
+    # Como tiramos a imagem por enquanto, filtramos a lista
+    boss_dados = [(b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]) for b in LISTA_BOSS_MASMORRAS]
+    
+    cursor.execute("DELETE FROM masmorras_mestre") # Limpa para atualizar valores de balanceamento
+    cursor.executemany("""
+        INSERT INTO masmorras_mestre (mapa_id, andar, nome, vida, ataque, defesa, xp_recompensa, gold_recompensa)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, boss_dados)
+
+    # 4. DROPS
+    cursor.execute("DELETE FROM drops_mapas")
     cursor.executemany("""
         INSERT INTO drops_mapas (mapa_id, item_nome, chance) 
         VALUES (?, ?, ?)
@@ -171,6 +219,126 @@ def popular_dados_iniciais():
 
     conn.commit()
     conn.close()
+    
+    
+def atualizar_estrutura_atributos():
+    """Força a atualização dos atributos e agora o Estilo do Item (categorias) no banco de dados."""
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Garante que as colunas essenciais existem na tabela principal de equipamentos
+    cursor.execute("PRAGMA table_info(itens_mestre)")
+    colunas = [info[1] for info in cursor.fetchall()]
+    
+    if "atributo_bonus" not in colunas:
+        cursor.execute("ALTER TABLE itens_mestre ADD COLUMN atributo_bonus TEXT DEFAULT NULL")
+    
+    # Nova coluna para segregar estilos de uso na parte visual de Acessórios!
+    if "estilo_acessorio" not in colunas:
+        cursor.execute("ALTER TABLE itens_mestre ADD COLUMN estilo_acessorio TEXT DEFAULT NULL")
+        print("✅ Coluna 'estilo_acessorio' adicionada em 'itens_mestre'.")
+
+    # Mapeamento atualizado do sistema para evitar perdas!
+    # No futuro, basta vir aqui e inserir (exemplo: 'Anel de Fogo': {'attr': 'ataque', 'estilo': 'anel'})
+    mapeamento_atributos = {
+        'Bússola': {'attr': 'sorte', 'estilo': 'bussola'},
+        'Binóculos': {'attr': 'critico', 'estilo': 'binoculos'}
+    }
+    
+    # Atualiza forçadamente (isso protege também quem já instalou os updates velhos de se beneficiarem disso)
+    for nome, config in mapeamento_atributos.items():
+        cursor.execute("""
+            UPDATE itens_mestre 
+            SET atributo_bonus = ?, estilo_acessorio = ? 
+            WHERE nome = ?
+        """, (config['attr'], config['estilo'], nome))
+    
+    print("✅ Estrutura de Atributos e Estilos verificada e forçada no DB.")
+    conn.commit()
+    conn.close()
+
+
+def equipar_desequipar_db(user_id, item_id):
+    conn = conectar()
+    cursor = conn.cursor()
+    
+    # Encontramos a posição e formato visual da linha do inventário real.
+    cursor.execute("SELECT item_nome, equipado FROM inventario WHERE id = ?", (item_id,))
+    item_inv = cursor.fetchone()
+    
+    if not item_inv:
+        conn.close()
+        return False, "Item não encontrado."
+
+    item_nome = item_inv['item_nome']
+    
+    # >> MODIFICAÇÃO CHAVE AQUI: O banco me manda também a classe isolada de "estilo" desse acessório
+    cursor.execute("SELECT subtipo, estilo_acessorio FROM itens_mestre WHERE nome = ?", (item_nome,))
+    dados_mestre = cursor.fetchone()
+    subtipo = dados_mestre['subtipo']
+    estilo_alvo = dados_mestre['estilo_acessorio']
+    
+    # MAPEAMENTO DE SLOTS DAS COLUNAS (Fixo nas demais opções normais de UI do DB antigo).
+    mapeamento = {
+        "arma": "arma_equipada",
+        "armadura": "armadura_equipada",
+        "conjunto": "set_equipado",
+        "acessorio": "acessorio_equipado"
+    }
+
+    if subtipo not in mapeamento:
+        conn.close()
+        return False, "Este tipo de item não pode ser equipado."
+
+    coluna_perso = mapeamento[subtipo]
+
+    # --- Rota A: Estamos tentando REMOVER / Desequipar o Item atual.
+    if item_inv['equipado'] == 1:
+        cursor.execute("UPDATE inventario SET equipado = 0 WHERE id = ?", (item_id,))
+        
+        # Só limpar se o campo da velha matriz for singleplayer de equipamento total (uma única var pro UI):
+        if subtipo != 'acessorio':
+            cursor.execute(f"UPDATE personagens SET {coluna_perso} = 'Nenhuma' WHERE user_id = ?", (user_id,))
+            
+        msg = f"Você desequipou {item_nome}."
+        
+    # --- Rota B: Estamos querendo INSTALAR esse item e ativar bônus dele.
+    else:
+        
+        if subtipo != 'acessorio':
+            # Antiga estrutura funcional segura do sistema Sênior para retirar espada a, inserir espada B!
+            cursor.execute("""
+                UPDATE inventario SET equipado = 0 
+                WHERE user_id = ? AND item_nome IN (SELECT nome FROM itens_mestre WHERE subtipo = ?)
+            """, (user_id, subtipo))
+            
+            # Aqui gravamos por ser algo único por slot exato visual 
+            cursor.execute(f"UPDATE personagens SET {coluna_perso} = ? WHERE user_id = ?", (item_nome, user_id))
+            
+        else:
+            # MAGIA EXCLUSIVA DA REGRA (ACESSÓRIOS): 
+            # Retire equipado DESTA MOCHILA que SEJAM exatamente DESSE ESTILO especificado pelo alvo ! (Se existir)!
+            if estilo_alvo: 
+                cursor.execute("""
+                    UPDATE inventario SET equipado = 0 
+                    WHERE user_id = ? AND equipado = 1 AND item_nome IN (
+                        SELECT nome FROM itens_mestre WHERE estilo_acessorio = ?
+                    )
+                """, (user_id, estilo_alvo))
+            
+            # Substituí por aviso genérico a antiga forma pra salvar integridade de DB antigas da aplicação:
+            cursor.execute(f"UPDATE personagens SET {coluna_perso} = 'Múltiplos Equipados' WHERE user_id = ?", (user_id,))
+
+        # Confirme e vire a var de Equipado como ativa global!
+        cursor.execute("UPDATE inventario SET equipado = 1 WHERE id = ?", (item_id,))
+        msg = f"Você equipou {item_nome}!"
+
+    conn.commit()
+    conn.close()
+    return True, msg
+
+
+    
     
 def get_drop_aleatorio(mapa_id):
     """Sorteia itens normais baseados apenas na chance do mapa/item."""
@@ -718,61 +886,13 @@ def get_pet_por_id(pet_id):
     return pet
 
 
-def equipar_desequipar_db(user_id, item_id):
-    conn = conectar()
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT item_nome, equipado FROM inventario WHERE id = ?", (item_id,))
-    item_inv = cursor.fetchone()
-    
-    if not item_inv:
-        conn.close()
-        return False, "Item não encontrado."
-
-    item_nome = item_inv['item_nome']
-    
-    cursor.execute("SELECT subtipo FROM itens_mestre WHERE nome = ?", (item_nome,))
-    subtipo = cursor.fetchone()['subtipo']
-    
-    # MAPEAMENTO DE SLOTS
-    mapeamento = {
-        "arma": "arma_equipada",
-        "armadura": "armadura_equipada",
-        "conjunto": "set_equipado",
-        "acessorio": "acessorio_equipado"  # Novo slot!
-    }
-
-    if subtipo not in mapeamento:
-        conn.close()
-        return False, "Este tipo de item não pode ser equipado."
-
-    coluna_perso = mapeamento[subtipo]
-
-    if item_inv['equipado'] == 1:
-        cursor.execute("UPDATE inventario SET equipado = 0 WHERE id = ?", (item_id,))
-        cursor.execute(f"UPDATE personagens SET {coluna_perso} = 'Nenhuma' WHERE user_id = ?", (user_id,))
-        msg = f"Você desequipou {item_nome}."
-    else:
-        # Desequipa apenas o que estiver no MESMO slot (ex: desequipa bússola mas mantém o set)
-        cursor.execute("""
-            UPDATE inventario SET equipado = 0 
-            WHERE user_id = ? AND item_nome IN (SELECT nome FROM itens_mestre WHERE subtipo = ?)
-        """, (user_id, subtipo))
-        
-        cursor.execute("UPDATE inventario SET equipado = 1 WHERE id = ?", (item_id,))
-        cursor.execute(f"UPDATE personagens SET {coluna_perso} = ? WHERE user_id = ?", (item_nome, user_id))
-        msg = f"Você equipou {item_nome}!"
-
-    conn.commit()
-    conn.close()
-    return True, msg
-
 
 def calcular_bonus_equipamentos(user_id):
+    """Calcula os status somando TODOS os equipamentos equipados."""
     conn = conectar()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT i.nivel_refino, m.subtipo, m.valor_efeito, m.nome 
+        SELECT i.nivel_refino, m.subtipo, m.valor_efeito, m.nome, m.atributo_bonus
         FROM inventario i
         JOIN itens_mestre m ON i.item_nome = m.nome
         WHERE i.user_id = ? AND i.equipado = 1
@@ -781,27 +901,35 @@ def calcular_bonus_equipamentos(user_id):
     itens_equipados = cursor.fetchall()
     conn.close()
 
-    bonus = {"ataque": 0, "defesa": 0, "vida_max": 0, "sorte": 0}
+    # Dicionário base de bônus
+    bonus = {"ataque": 0, "defesa": 0, "vida_max": 0, "sorte": 0, "critico": 0}
 
     for item in itens_equipados:
         sub = item['subtipo']
         val = item['valor_efeito'] + ((item['nivel_refino'] or 0) * 2)
 
-        if sub == 'arma': bonus['ataque'] += val
-        elif sub == 'armadura': bonus['defesa'] += val
+        if sub == 'arma': 
+            bonus['ataque'] += val
+        elif sub == 'armadura': 
+            bonus['defesa'] += val
         elif sub == 'conjunto':
             bonus['ataque'] += val
             bonus['defesa'] += val
             bonus['vida_max'] += (val * 2)
-        elif sub == 'acessorio': # Lógica para o novo slot
-            if item['nome'] == 'Bússola': bonus['sorte'] += val
-            if item['nome'] == 'Binóculos': bonus['ataque'] += val # Exemplo de bônus do binóculo
+        elif sub == 'acessorio':
+            # Proteção Sênior: Verifica se attr existe E é válido no dicionário
+            attr = item['atributo_bonus']
+            if attr and attr in bonus:
+                bonus[attr] += val
+            else:
+                print(' ')
             
     return bonus
 
 
+
 def aplicar_bonus_geral(jogador_bruto):
-    """Aplica bônus de Equipamentos e agora os novos bônus de 10% dos Pets."""
+    """Aplica bônus de Equipamentos e o bônus progressivo dos Pets (+0.5% a cada 2 níveis)."""
     jogador = dict(jogador_bruto)
     user_id = jogador['user_id']
 
@@ -811,22 +939,40 @@ def aplicar_bonus_geral(jogador_bruto):
     jogador['defesa'] += bonus_itens['defesa']
     jogador['vida_max'] += bonus_itens['vida_max']
     jogador['sorte'] += bonus_itens['sorte']
+    jogador['critico'] = (jogador.get('critico') or 1) + bonus_itens['critico']
 
-    # 2. BÔNUS DE PET (10% baseado no nome do pet)
+    # 2. BÔNUS DE PET (Sistemas Progressivos - Regra 3)
     if jogador.get('pet_equipado') == 1:
         nome_p = jogador.get('pet_nome')
+        lvl_p = jogador.get('pet_level', 1)
         
-        # Bônus de Status de Combate e Utilidade (Arredondado para baixo)
-        if nome_p == "Falcão filhote" or nome_p == "Sentinela de Marfim":
-            jogador['vida_max'] = int(jogador['vida_max'] * 1.10)
-        elif nome_p == "Lobo filhote" or nome_p == "Raposa de Cinza":
-            jogador['ataque'] = int(jogador['ataque'] * 1.10)
-        elif nome_p == "Tartaruga filhote" or nome_p == "Escudeiro de Casca":
-            jogador['defesa'] = int(jogador['defesa'] * 1.10)
+        # Calcula a escala: a cada 2 níveis, ganha 0.005 (0.5%)
+        # Lvl 1 e 2: escala 0 | Lvl 3 e 4: escala 1...
+        escala = (lvl_p - 1) // 2
+        bonus_adicional = escala * 0.005
+        
+        # Bônus Base: 10% (1.10) para Raros e 2% (1.02) para Iniciais
+        # Vamos identificar se é inicial pelo nome (como no seu modelos/monstros.py)
+        iniciais = ["Falcão filhote", "Lobo filhote", "Tartaruga filhote"]
+        base = 1.02 if nome_p in iniciais else 1.10
+        
+        multiplicador_final = base + bonus_adicional
+
+        # Aplicação dos bônus conforme o tipo de Pet
+        if nome_p in ["Falcão filhote", "Sentinela de Marfim"]:
+            jogador['vida_max'] = int(jogador['vida_max'] * multiplicador_final)
+            
+        elif nome_p in ["Lobo filhote", "Raposa de Cinza"]:
+            jogador['ataque'] = int(jogador['ataque'] * multiplicador_final)
+            
+        elif nome_p in ["Tartaruga filhote", "Escudeiro de Casca"]:
+            jogador['defesa'] = int(jogador['defesa'] * multiplicador_final)
+            
         elif nome_p == "Serpente de Lodo":
-            jogador['sorte'] = int(jogador['sorte'] * 1.10)
+            jogador['sorte'] = int(jogador['sorte'] * multiplicador_final)
+            
         elif nome_p == "Coruja de Vidro Astral":
-            jogador['critico'] = int(jogador['critico'] * 1.10)
+            jogador['critico'] = int(jogador['critico'] * multiplicador_final)
             
     return jogador
 
@@ -1176,3 +1322,12 @@ def consumir_materiais_alquimia(user_id, ingredientes, custo_gold):
         return False, "Erro arcano no banco de dados."
     finally:
         conn.close()
+        
+        
+def get_boss_masmorra(mapa_id, andar):
+    conn = conectar()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM masmorras_mestre WHERE mapa_id = ? AND andar = ?", (mapa_id, andar))
+    boss = cursor.fetchone()
+    conn.close()
+    return boss

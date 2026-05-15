@@ -126,6 +126,7 @@ async def exibir_mapa(update, context, mapa_id):
             "O que deseja fazer nesta área?"
         )
         keyboard.append([InlineKeyboardButton("⚔️ Caçar", callback_data=f"procurar_{mapa_id}")])
+        keyboard.append([InlineKeyboardButton("👹 Entrar na Masmorra", callback_data=f"entrar_masmorra_{mapa_id}")])
         keyboard.append([InlineKeyboardButton("🗺️ Viajar", callback_data="mapas")])
 
     # Botões utilitários (Aparecem em todos os mapas)

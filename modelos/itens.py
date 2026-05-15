@@ -24,15 +24,14 @@ LISTA_ITENS_MESTRE = [
     
     # OVOS DE PETS (Nomes amigáveis e funcionais)
     ('Ovo', 'consumivel', 'ovo', 0, 'Um ovo misterioso.', 500, 0, 0),
-    ('Ovo [Vila]', 'consumivel', 'ovo', 0, 'Um ovo encontrado na vila.', 500, 0, 0),
-    ('Ovo [Região 1]', 'consumivel', 'ovo', 0, 'Um ovo da região 1.', 0, 0, 0),
-    ('Ovo [Região 2]', 'consumivel', 'ovo', 0, 'Um ovo da região 2.', 0, 0, 0),
-    ('Ovo [Região 3]', 'consumivel', 'ovo', 0, 'Um ovo da região 3.', 0, 0, 0),
-    ('Ovo [Região 4]', 'consumivel', 'ovo', 0, 'Um ovo da região 4.', 0, 0, 0),
-    ('Ovo [Região 5]', 'consumivel', 'ovo', 0, 'Um ovo da região 5.', 0, 0, 0),
-    ('Ovo [Região 6]', 'consumivel', 'ovo', 0, 'Um ovo da região 6.', 0, 0, 0),
-    ('Ovo [Região 7]', 'consumivel', 'ovo', 0, 'Um ovo da região 7.', 0, 0, 0),
-    ('Ovo [Região 8]', 'consumivel', 'ovo', 0, 'Um ovo da região 8.', 0, 0, 0),
+    ('Ovo Acampamento do Pioneiro', 'consumivel', 'ovo', 0, 'Um ovo da região 1.', 0, 0, 0),
+    ('Ovo Bosque Queimado', 'consumivel', 'ovo', 0, 'Um ovo da região 2.', 0, 0, 0),
+    ('Ovo Ponte dos Suspiros', 'consumivel', 'ovo', 0, 'Um ovo da região 3.', 0, 0, 0),
+    ('Ovo Tumba do Caçador Ancião', 'consumivel', 'ovo', 0, 'Um ovo da região 4.', 0, 0, 0),
+    ('Ovo Cachoeira da Serenidade', 'consumivel', 'ovo', 0, 'Um ovo da região 5.', 0, 0, 0),
+    ('Ovo Desfiladeiro do Eco', 'consumivel', 'ovo', 0, 'Um ovo da região 6.', 0, 0, 0),
+    ('Ovo Pico do Observador', 'consumivel', 'ovo', 0, 'Um ovo da região 7.', 0, 0, 0),
+    ('Ovo Portal ds Montanhas', 'consumivel', 'ovo', 0, 'Um ovo da região 8.', 0, 0, 0),
 ]
 
 def buscar_dados_item(nome_item):

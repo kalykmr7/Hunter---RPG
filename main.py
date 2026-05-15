@@ -3,7 +3,7 @@ import admin
 import logging
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from config import TOKEN
-from handlers import start, cadastro, perfil, menu, login, router, status as handler_status, viagem, caca, mochila, atelie
+from handlers import start, cadastro, perfil, menu, login, router, status as handler_status, viagem, caca, mochila, atelie, masmorra
 import warnings
 
 # Configuração de Logging para ver erros no console da Shard Cloud
@@ -22,6 +22,7 @@ def main():
     database.criar_tabela_missoes()             #Cria a tabela de missoes diarias
     database.atualizar_estrutura_banco()        #Adiciona colunas novas em bancos antigos
     database.popular_dados_iniciais()           #Insere dados dos modelos
+    database.atualizar_estrutura_atributos()
     admin.debug_tabela()                        #debug
     
     # Construção do App
@@ -76,7 +77,11 @@ def main():
     app.add_handler(CallbackQueryHandler(atelie.listar_venda, pattern="^atelie_vender_lista_"))
     app.add_handler(CallbackQueryHandler(atelie.vender_detalhes_item, pattern="^vender_ver_"))
     app.add_handler(CallbackQueryHandler(atelie.executar_venda, pattern="^vender_exec_"))
-    
+    app.add_handler(CallbackQueryHandler(masmorra.iniciar_masmorra, pattern="^entrar_masmorra_"))
+    app.add_handler(CallbackQueryHandler(masmorra.atacar_masmorra_loop, pattern="^atacar_masmorra$"))
+    app.add_handler(CallbackQueryHandler(masmorra.usar_pocao_masmorra, pattern="^pocao_masmorra$"))
+    app.add_handler(CallbackQueryHandler(masmorra.confirmar_cura_masmorra, pattern="^itemmasm_"))
+    app.add_handler(CallbackQueryHandler(masmorra.renderizar_turno_masmorra_callback, pattern="^voltar_turno_masm$"))
     
     # drop_pending_updates=True limpa comandos antigos que foram enviados enquanto o bot estava off
     app.run_polling(drop_pending_updates=True)

@@ -57,23 +57,24 @@ async def menu_atelie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- SISTEMA DE VENDA ---
 
-async def listar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lista itens para venda. Melhoria na detecção de página."""
+async def listar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE, pagina_forcada=None):
+    """Lista itens para venda. Suporta injetar página manualmente."""
     query = update.callback_query
-    # Se a função for chamada sem um clique direto (via executar_venda), query já existe
     if not query: return
     
     user_id = query.from_user.id
     
-    # LÓGICA DE PÁGINA ROBUSTA:
-    # Se o final do query.data não for um número de página (ex: "lista_0"), assumimos 0.
-    partes = query.data.split("_")
-    ultima_parte = partes[-1]
-    
-    if ultima_parte.isdigit() and len(ultima_parte) < 4: # Se for um número pequeno, é página
-        pagina = int(ultima_parte)
+    # Nova Lógica Robusta e Segura de Paginação
+    if pagina_forcada is not None:
+        pagina = pagina_forcada
     else:
-        pagina = 0 # Caso contrário (como ID de item), volta para o começo
+        partes = query.data.split("_")
+        ultima_parte = partes[-1]
+        
+        if ultima_parte.isdigit() and len(ultima_parte) < 4:
+            pagina = int(ultima_parte)
+        else:
+            pagina = 0 
 
     itens = database.get_inventario(user_id)
     # Filtro: Itens desequipados E que possuem preço maior que 0
@@ -84,7 +85,7 @@ async def listar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fim = inicio + itens_per_page
     itens_pagina = vendeis[inicio:fim]
 
-    # TEXTO COM STATUS DE OURO (Bom feedback visual para o jogador)
+    # TEXTO COM STATUS DE OURO
     jogador = database.get_jogador(user_id)
     texto = (
         f"💰 Loja do Ateliê (Pág {pagina + 1})\n"
@@ -106,19 +107,21 @@ async def listar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    
-
 
 async def vender_detalhes_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Tela de confirmação com preço valorizado."""
+    """Tela de confirmação recebendo a página na memória."""
     query = update.callback_query
     await query.answer()
     
-    item_id = int(query.data.split("_")[-1])
+    partes = query.data.split("_")
+    item_id = int(partes[2])
+    
+    # Pega a página da memória do botão (se existir, senão 0)
+    pagina = int(partes[3]) if len(partes) > 3 else 0
+    
     user_id = query.from_user.id
     
     conn = database.conectar()
-    # Pega dados do inventário e do mestre ao mesmo tempo
     item = conn.execute("""
         SELECT i.id, i.item_nome, i.quantidade, i.nivel_refino, m.descricao, m.preco_gold 
         FROM inventario i JOIN itens_mestre m ON i.item_nome = m.nome WHERE i.id = ?
@@ -127,7 +130,6 @@ async def vender_detalhes_item(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if not item: return
 
-    # Cálculo do valor transparente para o jogador
     valor_unidade = int(item['preco_gold'] * 0.7) + (item['nivel_refino'] * 150)
     valor_total_stack = valor_unidade * item['quantidade']
     
@@ -143,14 +145,14 @@ async def vender_detalhes_item(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     keyboard = [
-        [InlineKeyboardButton(f"✅ Vender 1x ({valor_unidade}g)", callback_data=f"vender_exec_um_{item['id']}")],
+        # Passamos a PÁGINA no final para a função de executar lembrar pra onde voltar
+        [InlineKeyboardButton(f"✅ Vender 1x ({valor_unidade}g)", callback_data=f"vender_exec_um_{item['id']}_{pagina}")],
     ]
     
-    # Se tiver mais de 1, oferece opção de vender tudo
     if item['quantidade'] > 1:
-        keyboard.append([InlineKeyboardButton(f"💰 Vender TODAS ({valor_total_stack}g)", callback_data=f"vender_exec_tudo_{item['id']}")])
+        keyboard.append([InlineKeyboardButton(f"💰 Vender TODAS ({valor_total_stack}g)", callback_data=f"vender_exec_tudo_{item['id']}_{pagina}")])
         
-    keyboard.append([InlineKeyboardButton("⬅️ Voltar", callback_data="atelie_vender_lista_0")])
+    keyboard.append([InlineKeyboardButton("⬅️ Voltar", callback_data=f"atelie_vender_lista_{pagina}")])
 
     await query.edit_message_caption(caption=texto, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -171,14 +173,12 @@ async def executar_venda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if sucesso:
         # 2. Responde o popup
-        await query.answer(msg, show_alert=False) # Mudamos para False (balão pequeno) para ser mais rápido
+        await query.answer(msg, show_alert=False) 
         database.atualizar_progresso_missao(user_id, 'venda', 1)
         
-        # 3. ATUALIZAÇÃO VISUAL: Forçamos o reset da página
-        query.data = "atelie_vender_lista_0"
-        
-        # Chamamos a função de lista para redesenhar a tela IMEDIATAMENTE
-        await listar_venda(update, context)
+        # 3. ATUALIZAÇÃO VISUAL LIMPA: Chamamos a função informando o parâmetro!
+        # Isso substitui a falha 'query.data = ' sem quebrar a restrição do Telegram.
+        await listar_venda(update, context, pagina_forcada=0)
     else:
         await query.answer(msg, show_alert=True)
     
